@@ -14,6 +14,7 @@
 
 #include <dynarmic/A32/a32.h>
 #include <dynarmic/A32/disassembler.h>
+#include <dynarmic/A32/resume_token.h>
 
 #include "common/common_types.h"
 #include "common/llvm_disassemble.h"
@@ -135,10 +136,10 @@ public:
     void InterpreterFallback(u32 pc, size_t num_instructions) override {
         fmt::print("> InterpreterFallback({:08x}, {}) code = {:08x}\n", pc, num_instructions, MemoryReadCode(pc));
     }
-    void CallSVC(std::uint32_t swi) override {
+    void CallSVC(A32::ResumeToken, std::uint32_t swi) override {
         fmt::print("> CallSVC({})\n", swi);
     }
-    void ExceptionRaised(u32 pc, Dynarmic::A32::Exception exception) override {
+    void ExceptionRaised(A32::ResumeToken, u32 pc, Dynarmic::A32::Exception exception) override {
         fmt::print("> ExceptionRaised({:08x}, {})", pc, static_cast<size_t>(exception));
     }
 

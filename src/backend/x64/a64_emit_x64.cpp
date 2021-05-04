@@ -627,12 +627,15 @@ void A64EmitX64::EmitA64SetPC(A64EmitContext& ctx, IR::Inst* inst) {
 void A64EmitX64::EmitA64CallSupervisor(A64EmitContext& ctx, IR::Inst* inst) {
     ctx.reg_alloc.HostCall(nullptr);
     auto args = ctx.reg_alloc.GetArgumentInfo(inst);
-    ASSERT(args[0].IsImmediate());
-    const u32 imm = args[0].GetImmediateU32();
-    Devirtualize<&A64::UserCallbacks::CallSVC>(conf.callbacks).EmitCall(code,
-        [&](RegList param) {
-            code.mov(param[0], imm);
-        });
+
+    Devirtualize<&A64::UserCallbacks::CallSVC>(conf.callbacks).EmitCall(code, [&](RegList param) {
+        ASSERT(args[0].IsImmediate());
+        const u32 imm = args[0].GetImmediateU32();
+
+        code.lea(param[0], ptr[rsp + ABI_SHADOW_SPACE]);
+        code.mov(param[1], imm);
+    });
+
     // The kernel would have to execute ERET to get here, which would clear exclusive state.
     code.mov(code.byte[r15 + offsetof(A64JitState, exclusive_state)], u8(0));
 }
@@ -640,14 +643,16 @@ void A64EmitX64::EmitA64CallSupervisor(A64EmitContext& ctx, IR::Inst* inst) {
 void A64EmitX64::EmitA64ExceptionRaised(A64EmitContext& ctx, IR::Inst* inst) {
     ctx.reg_alloc.HostCall(nullptr);
     auto args = ctx.reg_alloc.GetArgumentInfo(inst);
-    ASSERT(args[0].IsImmediate() && args[1].IsImmediate());
-    const u64 pc = args[0].GetImmediateU64();
-    const u64 exception = args[1].GetImmediateU64();
-    Devirtualize<&A64::UserCallbacks::ExceptionRaised>(conf.callbacks).EmitCall(code,
-        [&](RegList param) {
-            code.mov(param[0], pc);
-            code.mov(param[1], exception);
-        });
+
+    Devirtualize<&A64::UserCallbacks::ExceptionRaised>(conf.callbacks).EmitCall(code, [&](RegList param) {
+        ASSERT(args[0].IsImmediate() && args[1].IsImmediate());
+        const u64 pc = args[0].GetImmediateU64();
+        const u64 exception = args[1].GetImmediateU64();
+
+        code.lea(param[0], ptr[rsp + ABI_SHADOW_SPACE]);
+        code.mov(param[1], pc);
+        code.mov(param[2], exception);
+    });
 }
 
 void A64EmitX64::EmitA64DataCacheOperationRaised(A64EmitContext& ctx, IR::Inst* inst) {
@@ -1308,7 +1313,7 @@ void A64EmitX64::EmitTerminalImpl(IR::Term::CheckBit terminal, IR::LocationDescr
 }
 
 void A64EmitX64::EmitTerminalImpl(IR::Term::CheckHalt terminal, IR::LocationDescriptor initial_location, bool is_single_step) {
-    code.cmp(code.byte[r15 + offsetof(A64JitState, halt_requested)], u8(0));
+    code.cmp(code.byte[rsp + ABI_SHADOW_SPACE + offsetof(StackLayout, halt_requested)], u8(0));
     code.jne(code.GetForceReturnFromRunCodeAddress());
     EmitTerminal(terminal.else_, initial_location, is_single_step);
 }

@@ -161,6 +161,8 @@ void BlockOfCode::GenRunCode(std::function<void(BlockOfCode&)> rcp) {
     mov(r15, ABI_PARAM1);
     mov(rbx, ABI_PARAM2); // save temporarily in non-volatile register
 
+    mov(byte[rsp + ABI_SHADOW_SPACE + offsetof(StackLayout, halt_requested)], u8(false));
+
     cb.GetTicksRemaining->EmitCall(*this);
     mov(qword[rsp + ABI_SHADOW_SPACE + offsetof(StackLayout, cycles_to_run)], ABI_RETURN);
     mov(qword[rsp + ABI_SHADOW_SPACE + offsetof(StackLayout, cycles_remaining)], ABI_RETURN);
@@ -176,6 +178,8 @@ void BlockOfCode::GenRunCode(std::function<void(BlockOfCode&)> rcp) {
     ABI_PushCalleeSaveRegistersAndAdjustStack(*this, sizeof(StackLayout));
 
     mov(r15, ABI_PARAM1);
+
+    mov(byte[rsp + ABI_SHADOW_SPACE + offsetof(StackLayout, halt_requested)], u8(true));
 
     mov(qword[rsp + ABI_SHADOW_SPACE + offsetof(StackLayout, cycles_to_run)], 1);
     mov(qword[rsp + ABI_SHADOW_SPACE + offsetof(StackLayout, cycles_remaining)], 1);

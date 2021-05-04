@@ -57,7 +57,6 @@ public:
         ASSERT(!is_executing);
         is_executing = true;
         SCOPE_EXIT { this->is_executing = false; };
-        jit_state.halt_requested = false;
 
         // TODO: Check code alignment
 
@@ -80,7 +79,6 @@ public:
         ASSERT(!is_executing);
         is_executing = true;
         SCOPE_EXIT { this->is_executing = false; };
-        jit_state.halt_requested = true;
 
         block_of_code.StepCode(&jit_state, GetCurrentSingleStep());
 
@@ -102,10 +100,6 @@ public:
     void Reset() {
         ASSERT(!is_executing);
         jit_state = {};
-    }
-
-    void HaltExecution() {
-        jit_state.halt_requested = true;
     }
 
     u64 GetSP() const {
@@ -252,7 +246,6 @@ private:
 
     void RequestCacheInvalidation() {
         if (is_executing) {
-            jit_state.halt_requested = true;
             return;
         }
 
@@ -309,10 +302,6 @@ void Jit::InvalidateCacheRange(u64 start_address, size_t length) {
 
 void Jit::Reset() {
     impl->Reset();
-}
-
-void Jit::HaltExecution() {
-    impl->HaltExecution();
 }
 
 u64 Jit::GetSP() const {

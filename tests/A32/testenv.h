@@ -12,6 +12,7 @@
 #include <vector>
 
 #include <dynarmic/A32/a32.h>
+#include <dynarmic/A32/resume_token.h>
 
 #include "common/assert.h"
 #include "common/common_types.h"
@@ -97,9 +98,10 @@ public:
 
     void InterpreterFallback(u32 pc, size_t num_instructions) override { ASSERT_MSG(false, "InterpreterFallback({:08x}, {}) code = {:08x}", pc, num_instructions, MemoryReadCode(pc)); }
 
-    void CallSVC(std::uint32_t swi) override { ASSERT_MSG(false, "CallSVC({})", swi); }
+    void CallSVC(std::uint32_t swi) { ASSERT_MSG(false, "CallSVC({})", swi); }
+    void CallSVC(Dynarmic::A32::ResumeToken, std::uint32_t swi) override { CallSVC(swi); }
 
-    void ExceptionRaised(u32 pc, Dynarmic::A32::Exception /*exception*/) override { ASSERT_MSG(false, "ExceptionRaised({:08x}) code = {:08x}", pc, MemoryReadCode(pc)); }
+    void ExceptionRaised(Dynarmic::A32::ResumeToken, u32 pc, Dynarmic::A32::Exception /*exception*/) override { ASSERT_MSG(false, "ExceptionRaised({:08x}) code = {:08x}", pc, MemoryReadCode(pc)); }
 
     void AddTicks(std::uint64_t ticks) override {
         if (ticks > ticks_left) {

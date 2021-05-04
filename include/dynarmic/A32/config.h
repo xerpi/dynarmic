@@ -23,6 +23,7 @@ namespace A32 {
 using VAddr = std::uint32_t;
 
 class Coprocessor;
+class ResumeToken;
 
 enum class Exception {
     /// An UndefinedFault occured due to executing instruction with an unallocated encoding
@@ -89,9 +90,9 @@ struct UserCallbacks {
     virtual void InterpreterFallback(VAddr pc, size_t num_instructions) = 0;
 
     // This callback is called whenever a SVC instruction is executed.
-    virtual void CallSVC(std::uint32_t swi) = 0;
+    virtual void CallSVC(ResumeToken rt, std::uint32_t swi) = 0;
 
-    virtual void ExceptionRaised(VAddr pc, Exception exception) = 0;
+    virtual void ExceptionRaised(ResumeToken rt, VAddr pc, Exception exception) = 0;
 
     virtual void InstructionSynchronizationBarrierRaised() {}
 

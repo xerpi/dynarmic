@@ -9,6 +9,7 @@
 #include <map>
 
 #include <dynarmic/A64/a64.h>
+#include <dynarmic/A64/resume_token.h>
 
 #include "common/assert.h"
 #include "common/common_types.h"
@@ -107,9 +108,10 @@ public:
 
     void InterpreterFallback(u64 pc, size_t num_instructions) override { ASSERT_MSG(false, "InterpreterFallback({:016x}, {})", pc, num_instructions); }
 
-    void CallSVC(std::uint32_t swi) override { ASSERT_MSG(false, "CallSVC({})", swi); }
+    void CallSVC(std::uint32_t swi) { ASSERT_MSG(false, "CallSVC({})", swi); }
+    void CallSVC(Dynarmic::A64::ResumeToken, std::uint32_t swi) override { CallSVC(swi); }
 
-    void ExceptionRaised(u64 pc, Dynarmic::A64::Exception /*exception*/) override { ASSERT_MSG(false, "ExceptionRaised({:016x})", pc); }
+    void ExceptionRaised(Dynarmic::A64::ResumeToken, u64 pc, Dynarmic::A64::Exception /*exception*/) override { ASSERT_MSG(false, "ExceptionRaised({:016x})", pc); }
 
     void AddTicks(std::uint64_t ticks) override {
         if (ticks > ticks_left) {

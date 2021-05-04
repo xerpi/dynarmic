@@ -24,6 +24,8 @@ using VAddr = std::uint64_t;
 using Vector = std::array<std::uint64_t, 2>;
 static_assert(sizeof(Vector) == sizeof(std::uint64_t) * 2, "Vector must be 128 bits in size");
 
+class ResumeToken;
+
 enum class Exception {
     /// An UndefinedFault occured due to executing instruction with an unallocated encoding
     UnallocatedEncoding,
@@ -115,9 +117,9 @@ struct UserCallbacks {
     virtual void InterpreterFallback(VAddr pc, size_t num_instructions) = 0;
 
     // This callback is called whenever a SVC instruction is executed.
-    virtual void CallSVC(std::uint32_t swi) = 0;
+    virtual void CallSVC(ResumeToken rt, std::uint32_t swi) = 0;
 
-    virtual void ExceptionRaised(VAddr pc, Exception exception) = 0;
+    virtual void ExceptionRaised(ResumeToken rt, VAddr pc, Exception exception) = 0;
     virtual void DataCacheOperationRaised(DataCacheOperation /*op*/, VAddr /*value*/) {}
     virtual void InstructionCacheOperationRaised(InstructionCacheOperation /*op*/, VAddr /*value*/) {}
     virtual void InstructionSynchronizationBarrierRaised() {}

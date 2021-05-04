@@ -42,7 +42,6 @@ struct A32JitState {
     // For internal use (See: BlockOfCode::RunCode)
     u32 guest_MXCSR = 0x00001f80;
     u32 asimd_MXCSR = 0x00009fc0;
-    bool halt_requested = false;
 
     // Exclusive state
     u32 exclusive_state = 0;
@@ -65,27 +64,12 @@ struct A32JitState {
     }
 
     void TransferJitState(const A32JitState& src, bool reset_rsb) {
-        Reg = src.Reg;
-        upper_location_descriptor = src.upper_location_descriptor;
-        cpsr_ge = src.cpsr_ge;
-        cpsr_q = src.cpsr_q;
-        cpsr_nzcv = src.cpsr_nzcv;
-        cpsr_jaifm = src.cpsr_jaifm;
-        ExtReg = src.ExtReg;
-        guest_MXCSR = src.guest_MXCSR;
-        asimd_MXCSR = src.asimd_MXCSR;
-        fpsr_exc = src.fpsr_exc;
-        fpsr_qc = src.fpsr_qc;
-        fpsr_nzcv = src.fpsr_nzcv;
+        *this = src;
 
         exclusive_state = 0;
 
         if (reset_rsb) {
             ResetRSB();
-        } else {
-            rsb_ptr = src.rsb_ptr;
-            rsb_location_descriptors = src.rsb_location_descriptors;
-            rsb_codeptrs = src.rsb_codeptrs;
         }
     }
 };

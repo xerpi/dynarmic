@@ -5,8 +5,10 @@ add_library(dynarmic
     ../include/dynarmic/A32/coprocessor.h
     ../include/dynarmic/A32/coprocessor_util.h
     ../include/dynarmic/A32/disassembler.h
+    ../include/dynarmic/A32/resume_token.h
     ../include/dynarmic/A64/a64.h
     ../include/dynarmic/A64/config.h
+    ../include/dynarmic/A64/resume_token.h
     ../include/dynarmic/exclusive_monitor.h
     ../include/dynarmic/optimization_flags.h
     common/assert.cpp
@@ -303,6 +305,7 @@ if (ARCHITECTURE STREQUAL "x86_64")
             backend/x64/a32_interface.cpp
             backend/x64/a32_jitstate.cpp
             backend/x64/a32_jitstate.h
+            backend/x64/a32_resume_token.cpp
         )
     endif()
 
@@ -313,6 +316,7 @@ if (ARCHITECTURE STREQUAL "x86_64")
             backend/x64/a64_interface.cpp
             backend/x64/a64_jitstate.cpp
             backend/x64/a64_jitstate.h
+            backend/x64/a64_resume_token.cpp
         )
     endif()
 

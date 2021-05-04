@@ -793,8 +793,17 @@ void A32EmitX64::EmitA32CallSupervisor(A32EmitContext& ctx, IR::Inst* inst) {
     ctx.reg_alloc.EndOfAllocScope();
 
     auto args = ctx.reg_alloc.GetArgumentInfo(inst);
-    ctx.reg_alloc.HostCall(nullptr, {}, args[0]);
-    Devirtualize<&A32::UserCallbacks::CallSVC>(conf.callbacks).EmitCall(code);
+    ctx.reg_alloc.HostCall(nullptr);
+    Devirtualize<&A32::UserCallbacks::CallSVC>(conf.callbacks).EmitCall(code, [&](RegList param) {
+        ASSERT(args[0].IsImmediate());
+        const u32 imm = args[0].GetImmediateU32();
+
+        code.lea(param[0], ptr[rsp + ABI_SHADOW_SPACE]);
+        code.mov(param[1], imm);
+    });
+
+    // The kernel would have to execute ERET to get here, which would clear exclusive state.
+    code.mov(code.byte[r15 + offsetof(A32JitState, exclusive_state)], u8(0));
 
     Devirtualize<&A32::UserCallbacks::GetTicksRemaining>(conf.callbacks).EmitCall(code);
     code.mov(qword[rsp + ABI_SHADOW_SPACE + offsetof(StackLayout, cycles_to_run)], code.ABI_RETURN);
@@ -812,10 +821,12 @@ void A32EmitX64::EmitA32ExceptionRaised(A32EmitContext& ctx, IR::Inst* inst) {
     ctx.reg_alloc.EndOfAllocScope();
 
     auto args = ctx.reg_alloc.GetArgumentInfo(inst);
-    ASSERT(args[0].IsImmediate() && args[1].IsImmediate());
-    const u32 pc = args[0].GetImmediateU32();
-    const u64 exception = args[1].GetImmediateU64();
     Devirtualize<&A32::UserCallbacks::ExceptionRaised>(conf.callbacks).EmitCall(code, [&](RegList param) {
+        ASSERT(args[0].IsImmediate() && args[1].IsImmediate());
+        const u32 pc = args[0].GetImmediateU32();
+        const u64 exception = args[1].GetImmediateU64();
+
+        code.lea(param[0], ptr[rsp + ABI_SHADOW_SPACE]);
         code.mov(param[0], pc);
         code.mov(param[1], exception);
     });
@@ -1624,7 +1635,7 @@ void A32EmitX64::EmitTerminalImpl(IR::Term::CheckBit terminal, IR::LocationDescr
 }
 
 void A32EmitX64::EmitTerminalImpl(IR::Term::CheckHalt terminal, IR::LocationDescriptor initial_location, bool is_single_step) {
-    code.cmp(code.byte[r15 + offsetof(A32JitState, halt_requested)], u8(0));
+    code.cmp(code.byte[rsp + ABI_SHADOW_SPACE + offsetof(StackLayout, halt_requested)], u8(0));
     code.jne(code.GetForceReturnFromRunCodeAddress());
     EmitTerminal(terminal.else_, initial_location, is_single_step);
 }
