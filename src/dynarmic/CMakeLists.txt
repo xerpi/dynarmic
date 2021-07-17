@@ -62,8 +62,6 @@ add_library(dynarmic
     common/u128.cpp
     common/u128.h
     common/variant_util.h
-    common/x64_disassemble.cpp
-    common/x64_disassemble.h
     frontend/A32/a32_types.cpp
     frontend/A32/a32_types.h
     frontend/A64/a64_types.cpp
@@ -262,6 +260,12 @@ if ("A64" IN_LIST DYNARMIC_FRONTENDS)
 endif()
 
 if (ARCHITECTURE STREQUAL "x86_64")
+    target_link_libraries(dynarmic
+        PUBLIC
+            $<BUILD_INTERFACE:xbyak>
+            $<BUILD_INTERFACE:Zydis>
+    )
+
     target_sources(dynarmic PRIVATE
         backend/x64/abi.cpp
         backend/x64/abi.h
@@ -299,6 +303,8 @@ if (ARCHITECTURE STREQUAL "x86_64")
         backend/x64/reg_alloc.cpp
         backend/x64/reg_alloc.h
         backend/x64/stack_layout.h
+        common/x64_disassemble.cpp
+        common/x64_disassemble.h
     )
 
     if ("A32" IN_LIST DYNARMIC_FRONTENDS)
@@ -356,6 +362,8 @@ if (ARCHITECTURE STREQUAL "x86_64")
     else()
         target_sources(dynarmic PRIVATE backend/x64/exception_handler_generic.cpp)
     endif()
+elseif (ARCHITECTURE STREQUAL "arm64")
+    target_link_libraries(dynarmic PUBLIC $<BUILD_INTERFACE:vixl>)
 else()
     message(FATAL_ERROR "Unsupported architecture")
 endif()
@@ -379,8 +387,6 @@ target_link_libraries(dynarmic
         $<BUILD_INTERFACE:fmt::fmt>
         $<BUILD_INTERFACE:mp>
         tsl::robin_map
-        $<BUILD_INTERFACE:xbyak>
-        $<BUILD_INTERFACE:Zydis>
         $<$<BOOL:DYNARMIC_USE_LLVM>:${llvm_libs}>
 )
 if (DYNARMIC_ENABLE_CPU_FEATURE_DETECTION)
