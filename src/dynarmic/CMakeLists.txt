@@ -360,6 +360,12 @@ if (ARCHITECTURE STREQUAL "x86_64")
     endif()
 elseif (ARCHITECTURE STREQUAL "arm64")
     target_link_libraries(dynarmic PUBLIC vixl)
+
+    if ("A32" IN_LIST DYNARMIC_FRONTENDS)
+        target_sources(dynarmic PRIVATE
+            backend/arm64/a32_interface.cpp
+        )
+    endif()
 else()
     message(FATAL_ERROR "Unsupported architecture")
 endif()
