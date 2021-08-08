@@ -2,6 +2,7 @@ add_library(vixl
     vixl/src/aarch64/abi-aarch64.h
     vixl/src/aarch64/assembler-aarch64.cc
     vixl/src/aarch64/assembler-aarch64.h
+    vixl/src/aarch64/assembler-sve-aarch64.cc
     vixl/src/aarch64/constants-aarch64.h
     vixl/src/aarch64/cpu-aarch64.cc
     vixl/src/aarch64/cpu-aarch64.h
@@ -17,9 +18,12 @@ add_library(vixl
     vixl/src/aarch64/logic-aarch64.cc
     vixl/src/aarch64/macro-assembler-aarch64.cc
     vixl/src/aarch64/macro-assembler-aarch64.h
+    vixl/src/aarch64/macro-assembler-sve-aarch64.cc
     vixl/src/aarch64/operands-aarch64.cc
     vixl/src/aarch64/operands-aarch64.h
     vixl/src/aarch64/pointer-auth-aarch64.cc
+    vixl/src/aarch64/registers-aarch64.cc
+    vixl/src/aarch64/registers-aarch64.h
     vixl/src/aarch64/simulator-aarch64.cc
     vixl/src/aarch64/simulator-aarch64.h
     vixl/src/aarch64/simulator-constants-aarch64.h
@@ -45,8 +49,4 @@ target_compile_definitions(vixl PUBLIC VIXL_INCLUDE_TARGET_AARCH64=1)
 if (MSVC)
     target_compile_options(vixl PUBLIC /Zc:__cplusplus)
 endif()
-if (UNIX AND NOT APPLE)
-    target_compile_definitions(vixl PUBLIC VIXL_CODE_BUFFER_MMAP=1)
-else()
-    target_compile_definitions(vixl PUBLIC VIXL_CODE_BUFFER_MALLOC=1)
-endif()
+target_compile_definitions(vixl PUBLIC VIXL_CODE_BUFFER_MALLOC=1)
