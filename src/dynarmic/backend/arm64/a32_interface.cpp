@@ -7,6 +7,7 @@
 
 #include <boost/icl/interval_set.hpp>
 
+#include "dynarmic/backend/arm64/a32_address_space.h"
 #include "dynarmic/backend/arm64/a32_jitstate.h"
 #include "dynarmic/common/assert.h"
 #include "dynarmic/common/scope_exit.h"
@@ -43,8 +44,9 @@ Context& Context::operator=(Context&& ctx) noexcept {
 }
 
 struct Jit::Impl final {
-    Impl(Jit* jit_interface, A32::UserConfig)
-            : jit_interface(jit_interface) {}
+    Impl(Jit* jit_interface, A32::UserConfig config)
+            : jit_interface(jit_interface)
+            , current_address_space(config) {}
 
     void Run() {
         ASSERT(!jit_interface->is_executing);
@@ -156,6 +158,7 @@ private:
 
     Jit* jit_interface;
     A32JitState current_state{};
+    A32AddressSpace current_address_space;
 
     // Requests made during execution to invalidate the cache are queued up here.
     size_t invalid_cache_generation = 0;
