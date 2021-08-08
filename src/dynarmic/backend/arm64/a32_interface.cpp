@@ -3,13 +3,23 @@
  * SPDX-License-Identifier: 0BSD
  */
 
+#include <memory>
+
+#include <boost/icl/interval_set.hpp>
+
+#include "dynarmic/backend/arm64/a32_jitstate.h"
 #include "dynarmic/common/assert.h"
+#include "dynarmic/common/scope_exit.h"
 #include "dynarmic/interface/A32/a32.h"
 #include "dynarmic/interface/A32/context.h"
 
 namespace Dynarmic::A32 {
 
-struct Context::Impl {};
+using namespace Backend::Arm64;
+
+struct Context::Impl {
+    A32JitState state;
+};
 
 Context::Context()
         : impl(std::make_unique<Context::Impl>()) {}
@@ -32,39 +42,125 @@ Context& Context::operator=(Context&& ctx) noexcept {
     return *this;
 }
 
-struct Jit::Impl {
-    Impl(Jit*, A32::UserConfig) {}
+struct Jit::Impl final {
+    Impl(Jit* jit_interface, A32::UserConfig)
+            : jit_interface(jit_interface) {}
 
-    void Run() { ASSERT_FALSE("Unimplemented"); }
+    void Run() {
+        ASSERT(!jit_interface->is_executing);
+        jit_interface->is_executing = true;
+        SCOPE_EXIT { jit_interface->is_executing = false; };
+        current_state.halt_requested = false;
 
-    void Step() { ASSERT_FALSE("Unimplemented"); }
+        ASSERT_FALSE("Unimplemented");
 
-    void ClearCache() { ASSERT_FALSE("Unimplemented"); }
+        RequestCacheInvalidation();
+    }
 
-    void InvalidateCacheRange(std::uint32_t start_address, std::size_t length) { ASSERT_FALSE("Unimplemented {} {}", start_address, length); }
+    void Step() {
+        ASSERT(!jit_interface->is_executing);
+        jit_interface->is_executing = true;
+        SCOPE_EXIT { jit_interface->is_executing = false; };
+        current_state.halt_requested = false;
 
-    void Reset() { ASSERT_FALSE("Unimplemented"); }
+        ASSERT_FALSE("Unimplemented");
 
-    void HaltExecution() { ASSERT_FALSE("Unimplemented"); }
+        RequestCacheInvalidation();
+    }
 
-    std::array<std::uint32_t, 16>& Regs() { ASSERT_FALSE("Unimplemented"); }
-    const std::array<std::uint32_t, 16>& Regs() const { ASSERT_FALSE("Unimplemented"); }
-    std::array<std::uint32_t, 64>& ExtRegs() { ASSERT_FALSE("Unimplemented"); }
-    const std::array<std::uint32_t, 64>& ExtRegs() const { ASSERT_FALSE("Unimplemented"); }
+    void ClearCache() {
+        invalidate_entire_cache = true;
+        RequestCacheInvalidation();
+    }
 
-    std::uint32_t Cpsr() const { ASSERT_FALSE("Unimplemented"); }
-    void SetCpsr(std::uint32_t value) { ASSERT_FALSE("Unimplemented {}", value); }
+    void InvalidateCacheRange(std::uint32_t start_address, std::size_t length) {
+        invalid_cache_ranges.add(boost::icl::discrete_interval<u32>::closed(start_address, static_cast<u32>(start_address + length - 1)));
+        RequestCacheInvalidation();
+    }
 
-    std::uint32_t Fpscr() const { ASSERT_FALSE("Unimplemented"); }
-    void SetFpscr(std::uint32_t value) { ASSERT_FALSE("Unimplemented {}", value); }
+    void Reset() {
+        current_state = {};
+    }
 
-    Context SaveContext() const { ASSERT_FALSE("Unimplemented"); }
-    void SaveContext(Context&) const { ASSERT_FALSE("Unimplemented"); }
-    void LoadContext(const Context&) { ASSERT_FALSE("Unimplemented"); }
+    void HaltExecution() {
+        current_state.halt_requested = true;
+    }
 
-    void ClearExclusiveState() { ASSERT_FALSE("Unimplemented"); }
+    std::array<std::uint32_t, 16>& Regs() {
+        return current_state.regs;
+    }
 
-    void DumpDisassembly() const { ASSERT_FALSE("Unimplemented"); }
+    const std::array<std::uint32_t, 16>& Regs() const {
+        return current_state.regs;
+    }
+
+    std::array<std::uint32_t, 64>& ExtRegs() {
+        return current_state.ext_regs;
+    }
+
+    const std::array<std::uint32_t, 64>& ExtRegs() const {
+        return current_state.ext_regs;
+    }
+
+    std::uint32_t Cpsr() const {
+        return current_state.cpsr;
+    }
+
+    void SetCpsr(std::uint32_t value) {
+        current_state.cpsr = value;
+    }
+
+    std::uint32_t Fpscr() const {
+        return current_state.fpscr;
+    }
+
+    void SetFpscr(std::uint32_t value) {
+        current_state.fpscr = value;
+    }
+
+    Context SaveContext() const {
+        Context ctx;
+        ctx.impl->state = current_state;
+        return ctx;
+    }
+
+    void SaveContext(Context& ctx) const {
+        ctx.impl->state = current_state;
+    }
+
+    void LoadContext(const Context& ctx) {
+        current_state = ctx.impl->state;
+    }
+
+    void ClearExclusiveState() {
+        current_state.exclusive_state = false;
+    }
+
+    void DumpDisassembly() const {
+        ASSERT_FALSE("Unimplemented");
+    }
+
+private:
+    void RequestCacheInvalidation() {
+        if (jit_interface->is_executing) {
+            current_state.halt_requested = true;
+            return;
+        }
+
+        ASSERT_FALSE("Unimplemented");
+
+        invalidate_entire_cache = false;
+        invalid_cache_ranges.clear();
+        invalid_cache_generation++;
+    }
+
+    Jit* jit_interface;
+    A32JitState current_state{};
+
+    // Requests made during execution to invalidate the cache are queued up here.
+    size_t invalid_cache_generation = 0;
+    boost::icl::interval_set<u32> invalid_cache_ranges;
+    bool invalidate_entire_cache = false;
 };
 
 Jit::Jit(UserConfig conf)

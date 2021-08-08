@@ -364,6 +364,7 @@ elseif (ARCHITECTURE STREQUAL "arm64")
     if ("A32" IN_LIST DYNARMIC_FRONTENDS)
         target_sources(dynarmic PRIVATE
             backend/arm64/a32_interface.cpp
+            backend/arm64/a32_jitstate.h
         )
     endif()
 else()
