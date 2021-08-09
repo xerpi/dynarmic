@@ -54,7 +54,11 @@ struct Jit::Impl final {
         SCOPE_EXIT { jit_interface->is_executing = false; };
         current_state.halt_requested = false;
 
-        ASSERT_FALSE("Unimplemented");
+        // TODO: RSB Optimization
+        const auto descriptor = current_state.GetLocationDescriptor();
+        const auto entry_point = current_address_space.GetBlock(descriptor).entry_point;
+        const auto run_code = current_address_space.GetPreludeInfo().run_code;
+        run_code(current_state, entry_point);
 
         RequestCacheInvalidation();
     }
