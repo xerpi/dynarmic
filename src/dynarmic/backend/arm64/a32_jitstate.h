@@ -8,6 +8,8 @@
 #include <array>
 
 #include "dynarmic/common/common_types.h"
+#include "dynarmic/frontend/A32/a32_location_descriptor.h"
+#include "dynarmic/ir/a32_location_descriptor.h"
 
 namespace Dynarmic::Backend::Arm64 {
 
@@ -19,6 +21,11 @@ struct A32JitState {
     bool exclusive_state = false;
 
     bool halt_requested = false;
+
+    IR::LocationDescriptor GetLocationDescriptor() const {
+        // TODO: Optimize
+        return A32::LocationDescriptor{regs[15], A32::PSR{cpsr}, A32::FPSCR{fpscr}};
+    }
 };
 
 }  // namespace Dynarmic::Backend::Arm64
