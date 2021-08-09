@@ -365,10 +365,13 @@ elseif (ARCHITECTURE STREQUAL "arm64")
         target_sources(dynarmic PRIVATE
             backend/arm64/a32_address_space.cpp
             backend/arm64/a32_address_space.h
+            backend/arm64/a32_emitter.cpp
+            backend/arm64/a32_emitter.h
             backend/arm64/a32_interface.cpp
             backend/arm64/a32_jitstate.h
             backend/arm64/code_buffer.cpp
             backend/arm64/code_buffer.h
+            backend/arm64/prelude_info.h
         )
     endif()
 else()

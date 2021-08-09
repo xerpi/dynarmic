@@ -44,9 +44,9 @@ Context& Context::operator=(Context&& ctx) noexcept {
 }
 
 struct Jit::Impl final {
-    Impl(Jit* jit_interface, A32::UserConfig config)
+    Impl(Jit* jit_interface, A32::UserConfig conf)
             : jit_interface(jit_interface)
-            , current_address_space(config) {}
+            , current_address_space(conf) {}
 
     void Run() {
         ASSERT(!jit_interface->is_executing);
@@ -153,7 +153,6 @@ private:
 
         invalidate_entire_cache = false;
         invalid_cache_ranges.clear();
-        invalid_cache_generation++;
     }
 
     Jit* jit_interface;
@@ -161,7 +160,6 @@ private:
     A32AddressSpace current_address_space;
 
     // Requests made during execution to invalidate the cache are queued up here.
-    size_t invalid_cache_generation = 0;
     boost::icl::interval_set<u32> invalid_cache_ranges;
     bool invalidate_entire_cache = false;
 };
