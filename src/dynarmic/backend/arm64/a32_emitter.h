@@ -20,7 +20,7 @@ struct PreludeInfo;
 
 class A32Emitter {
 public:
-    A32Emitter(const PreludeInfo& prelude, vixl::aarch64::MacroAssembler& code);
+    A32Emitter(PreludeInfo& prelude, vixl::aarch64::MacroAssembler& code);
 
     void Emit(IR::Block& block);
 
@@ -33,7 +33,7 @@ private:
 #undef A32OPC
 #undef A64OPC
 
-    const PreludeInfo& prelude;
+    PreludeInfo& prelude;
     vixl::aarch64::MacroAssembler& code;
 };
 
