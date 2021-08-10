@@ -9,7 +9,12 @@
 #include <boost/icl/interval_set.hpp>
 
 #include "dynarmic/backend/arm64/a32_emitter.h"
+#include "dynarmic/backend/arm64/a32_jitstate.h"
+#include "dynarmic/backend/arm64/devirtualize.h"
+#include "dynarmic/backend/arm64/stack_layout.h"
+#include "dynarmic/backend/arm64/vixl_helpers.h"
 #include "dynarmic/common/assert.h"
+#include "dynarmic/common/cast_util.h"
 #include "dynarmic/common/common_types.h"
 #include "dynarmic/frontend/A32/location_descriptor.h"
 #include "dynarmic/frontend/A32/translate/translate.h"
@@ -21,7 +26,9 @@
 namespace Dynarmic::Backend::Arm64 {
 
 A32AddressSpace::A32AddressSpace(const A32::UserConfig& conf)
-        : conf(conf) {}
+        : conf(conf) {
+    EmitPrelude();
+}
 
 A32AddressSpace::~A32AddressSpace() = default;
 
@@ -44,8 +51,54 @@ void A32AddressSpace::InvalidateCacheRanges(const boost::icl::interval_set<u32>&
 }
 
 void A32AddressSpace::EmitPrelude() {
+    using namespace vixl::aarch64;
+
+    // Dispatcher
+
     prelude.run_code = code.GetCursorAddress<PreludeInfo::RunCodeFuncType>();
-    ASSERT_FALSE("Unimplemented");
+
+    code.PushCalleeSavedRegisters();
+    code.Sub(sp, sp, sizeof(StackLayout));
+    code.Mov(x28, x0);  // Store JitState pointer in x28
+    code.Mov(x19, x1);
+
+    static_assert(offsetof(StackLayout, save_host_fpsr) + 4 == offsetof(StackLayout, save_host_fpcr));
+    code.Mrs(x2, FPSR);
+    code.Mrs(x3, FPCR);
+    code.Stp(w2, w3, MemOperand{sp, offsetof(StackLayout, save_host_fpsr)});
+
+    Devirtualize<&A32::UserCallbacks::GetTicksRemaining>(conf.callbacks).EmitCall(code);
+    code.Str(x0, MemOperand{sp, offsetof(StackLayout, cycles_to_run)});
+    code.Mov(x27, x0);  // Store cycles_remaining in x27
+
+    code.Br(x19);
+
+    code.Bind(&prelude.return_from_run_code);
+
+    code.Cmp(x27, 0);
+    code.B(le, &prelude.return_to_caller);
+    code.Mov(x1, x28);
+    code.CallRuntime(Common::FptrCast([](A32AddressSpace& self, A32JitState& state) -> void* {
+        return self.GetBlock(state.GetLocationDescriptor()).entry_point;
+    }));
+    code.Br(x0);
+
+    code.Bind(&prelude.return_to_caller);
+
+    code.Ldr(x1, MemOperand{sp, offsetof(StackLayout, cycles_to_run)});
+    code.Sub(x1, x1, x27);
+    Devirtualize<&A32::UserCallbacks::AddTicks>(conf.callbacks).EmitCall(code);
+
+    static_assert(offsetof(StackLayout, save_host_fpsr) + 4 == offsetof(StackLayout, save_host_fpcr));
+    code.Ldp(w2, w3, MemOperand{sp, offsetof(StackLayout, save_host_fpsr)});
+    code.Msr(FPSR, x2);
+    code.Msr(FPCR, x3);
+
+    code.Add(sp, sp, sizeof(StackLayout));
+    code.PopCalleeSavedRegisters();
+    code.Ret();
+
+    code.FinalizeCode();
 }
 
 A32AddressSpace::BlockDescriptor A32AddressSpace::EmitBlock(IR::LocationDescriptor descriptor) {
