@@ -73,6 +73,7 @@ protected:
 
     std::map<std::tuple<size_t, int, int>, void (*)()> read_fallbacks;
     std::map<std::tuple<size_t, int, int>, void (*)()> write_fallbacks;
+    std::map<int, void (*)()> exclusive_write_fallbacks;
     void GenFastmemFallbacks();
 
     const void* terminal_handler_pop_rsb_hint;
@@ -97,7 +98,7 @@ protected:
     struct FastmemPatchInfo {
         u64 resume_rip;
         u64 callback;
-        DoNotFastmemMarker marker;
+        std::optional<DoNotFastmemMarker> marker;
     };
     tsl::robin_map<u64, FastmemPatchInfo> fastmem_patch_info;
     std::set<DoNotFastmemMarker> do_not_fastmem;

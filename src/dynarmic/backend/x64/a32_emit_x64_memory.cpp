@@ -84,6 +84,14 @@ void A32EmitX64::GenFastmemFallbacks() {
             }
         }
     }
+
+    for (int status_idx : idxes) {
+        code.align();
+        exclusive_write_fallbacks[status_idx] = code.getCurr<void (*)()>();
+        code.mov(Xbyak::Reg32{status_idx}, 1);
+        code.ret();
+        PerfMapRegister(exclusive_write_fallbacks[status_idx], code.getCurr(), fmt::format("a64_exclusive_write_fallback"));
+    }
 }
 
 std::optional<A32EmitX64::DoNotFastmemMarker> A32EmitX64::ShouldFastmem(A32EmitContext& ctx, IR::Inst* inst) const {
@@ -110,14 +118,16 @@ FakeCall A32EmitX64::FastmemCallback(u64 rip_) {
     }
 
     if (conf.recompile_on_fastmem_failure) {
-        const auto marker = iter->second.marker;
-        do_not_fastmem.emplace(marker);
-        InvalidateBasicBlocks({std::get<0>(marker)});
+        if (const auto marker = iter->second.marker) {
+            do_not_fastmem.emplace(*marker);
+            InvalidateBasicBlocks({std::get<0>(*marker)});
+        }
     }
-    FakeCall ret;
-    ret.call_rip = iter->second.callback;
-    ret.ret_rip = iter->second.resume_rip;
-    return ret;
+
+    return FakeCall{
+        .call_rip = iter->second.callback,
+        .ret_rip = iter->second.resume_rip,
+    };
 }
 
 namespace {
@@ -416,40 +426,189 @@ void A32EmitX64::ExclusiveWriteMemory(A32EmitContext& ctx, IR::Inst* inst) {
     code.L(end);
 }
 
+template<std::size_t bitsize, auto callback>
+void A32EmitX64::ExclusiveReadMemoryInlineUnsafe(A32EmitContext& ctx, IR::Inst* inst) {
+    ASSERT(conf.global_monitor && conf.fastmem_pointer);
+    if (!exception_handler.SupportsFastmem()) {
+        ExclusiveReadMemory<bitsize, callback>(ctx, inst);
+        return;
+    }
+
+    auto args = ctx.reg_alloc.GetArgumentInfo(inst);
+
+    const Xbyak::Reg64 vaddr = ctx.reg_alloc.UseGpr(args[0]);
+    const Xbyak::Reg64 value = ctx.reg_alloc.ScratchGpr();
+    const Xbyak::Reg64 cmp_value_addr = ctx.reg_alloc.ScratchGpr();
+
+    const auto wrapped_fn = read_fallbacks[std::make_tuple(bitsize, vaddr.getIdx(), value.getIdx())];
+
+    Xbyak::Label abort, end;
+    bool require_abort_handling = false;
+
+    const auto src_ptr = r13 + vaddr;
+
+    const auto location = code.getCurr();
+    EmitReadMemoryMov<bitsize>(code, value, src_ptr);
+
+    fastmem_patch_info.emplace(
+        Common::BitCast<u64>(location),
+        FastmemPatchInfo{
+            Common::BitCast<u64>(code.getCurr()),
+            Common::BitCast<u64>(wrapped_fn),
+            std::nullopt,
+        });
+
+    code.L(end);
+
+    code.mov(code.byte[r15 + offsetof(A32JitState, exclusive_state)], u8(1));
+    code.mov(cmp_value_addr, Common::BitCast<u64>(GetExclusiveMonitorValuePointer(conf.global_monitor, conf.processor_id)));
+    EmitWriteMemoryMov<bitsize>(code, cmp_value_addr, value);
+
+    if (require_abort_handling) {
+        code.SwitchToFarCode();
+        code.L(abort);
+        code.call(wrapped_fn);
+        code.jmp(end, code.T_NEAR);
+        code.SwitchToNearCode();
+    }
+
+    ctx.reg_alloc.DefineValue(inst, value);
+}
+
+template<std::size_t bitsize, auto callback>
+void A32EmitX64::ExclusiveWriteMemoryInlineUnsafe(A32EmitContext& ctx, IR::Inst* inst) {
+    ASSERT(conf.global_monitor && conf.fastmem_pointer);
+    if (!exception_handler.SupportsFastmem()) {
+        ExclusiveWriteMemory<bitsize, callback>(ctx, inst);
+        return;
+    }
+
+    auto args = ctx.reg_alloc.GetArgumentInfo(inst);
+
+    ctx.reg_alloc.ScratchGpr(HostLoc::RAX);
+    const Xbyak::Reg64 value = ctx.reg_alloc.UseGpr(args[1]);
+    const Xbyak::Reg64 vaddr = ctx.reg_alloc.UseGpr(args[0]);
+    const Xbyak::Reg32 status = ctx.reg_alloc.ScratchGpr().cvt32();
+    const Xbyak::Reg64 cmp_value_addr = ctx.reg_alloc.ScratchGpr();
+
+    const auto fallback_fn = exclusive_write_fallbacks[status.getIdx()];
+
+    Xbyak::Label end;
+
+    const auto dest_ptr = r13 + vaddr;
+
+    code.mov(status, u32(1));
+    code.cmp(code.byte[r15 + offsetof(A32JitState, exclusive_state)], u8(0));
+    code.je(end);
+    code.mov(code.byte[r15 + offsetof(A32JitState, exclusive_state)], u8(0));
+    code.mov(cmp_value_addr, Common::BitCast<u64>(GetExclusiveMonitorValuePointer(conf.global_monitor, conf.processor_id)));
+
+    EmitReadMemoryMov<bitsize>(code, rax, cmp_value_addr);
+
+    const auto location = code.getCurr();
+
+    switch (bitsize) {
+    case 8:
+        code.lock();
+        code.cmpxchg(code.byte[dest_ptr], value.cvt8());
+        break;
+    case 16:
+        code.lock();
+        code.cmpxchg(word[dest_ptr], value.cvt16());
+        break;
+    case 32:
+        code.lock();
+        code.cmpxchg(dword[dest_ptr], value.cvt32());
+        break;
+    case 64:
+        code.lock();
+        code.cmpxchg(qword[dest_ptr], value.cvt64());
+        break;
+    default:
+        UNREACHABLE();
+    }
+
+    fastmem_patch_info.emplace(
+        Common::BitCast<u64>(location),
+        FastmemPatchInfo{
+            Common::BitCast<u64>(code.getCurr()),
+            Common::BitCast<u64>(fallback_fn),
+            std::nullopt,
+        });
+
+    code.setnz(status.cvt8());
+
+    code.L(end);
+
+    ctx.reg_alloc.DefineValue(inst, status);
+}
+
 void A32EmitX64::EmitA32ClearExclusive(A32EmitContext&, IR::Inst*) {
     code.mov(code.byte[r15 + offsetof(A32JitState, exclusive_state)], u8(0));
 }
 
 void A32EmitX64::EmitA32ExclusiveReadMemory8(A32EmitContext& ctx, IR::Inst* inst) {
-    ExclusiveReadMemory<8, &A32::UserCallbacks::MemoryRead8>(ctx, inst);
+    if (conf.HasOptimization(OptimizationFlag::Unsafe_IgnoreGlobalMonitor)) {
+        ExclusiveReadMemoryInlineUnsafe<8, &A32::UserCallbacks::MemoryRead8>(ctx, inst);
+    } else {
+        ExclusiveReadMemory<8, &A32::UserCallbacks::MemoryRead8>(ctx, inst);
+    }
 }
 
 void A32EmitX64::EmitA32ExclusiveReadMemory16(A32EmitContext& ctx, IR::Inst* inst) {
-    ExclusiveReadMemory<16, &A32::UserCallbacks::MemoryRead16>(ctx, inst);
+    if (conf.HasOptimization(OptimizationFlag::Unsafe_IgnoreGlobalMonitor)) {
+        ExclusiveReadMemoryInlineUnsafe<16, &A32::UserCallbacks::MemoryRead16>(ctx, inst);
+    } else {
+        ExclusiveReadMemory<16, &A32::UserCallbacks::MemoryRead16>(ctx, inst);
+    }
 }
 
 void A32EmitX64::EmitA32ExclusiveReadMemory32(A32EmitContext& ctx, IR::Inst* inst) {
-    ExclusiveReadMemory<32, &A32::UserCallbacks::MemoryRead32>(ctx, inst);
+    if (conf.HasOptimization(OptimizationFlag::Unsafe_IgnoreGlobalMonitor)) {
+        ExclusiveReadMemoryInlineUnsafe<32, &A32::UserCallbacks::MemoryRead32>(ctx, inst);
+    } else {
+        ExclusiveReadMemory<32, &A32::UserCallbacks::MemoryRead32>(ctx, inst);
+    }
 }
 
 void A32EmitX64::EmitA32ExclusiveReadMemory64(A32EmitContext& ctx, IR::Inst* inst) {
-    ExclusiveReadMemory<64, &A32::UserCallbacks::MemoryRead64>(ctx, inst);
+    if (conf.HasOptimization(OptimizationFlag::Unsafe_IgnoreGlobalMonitor)) {
+        ExclusiveReadMemoryInlineUnsafe<64, &A32::UserCallbacks::MemoryRead64>(ctx, inst);
+    } else {
+        ExclusiveReadMemory<64, &A32::UserCallbacks::MemoryRead64>(ctx, inst);
+    }
 }
 
 void A32EmitX64::EmitA32ExclusiveWriteMemory8(A32EmitContext& ctx, IR::Inst* inst) {
-    ExclusiveWriteMemory<8, &A32::UserCallbacks::MemoryWriteExclusive8>(ctx, inst);
+    if (conf.HasOptimization(OptimizationFlag::Unsafe_IgnoreGlobalMonitor)) {
+        ExclusiveWriteMemoryInlineUnsafe<8, &A32::UserCallbacks::MemoryWriteExclusive8>(ctx, inst);
+    } else {
+        ExclusiveWriteMemory<8, &A32::UserCallbacks::MemoryWriteExclusive8>(ctx, inst);
+    }
 }
 
 void A32EmitX64::EmitA32ExclusiveWriteMemory16(A32EmitContext& ctx, IR::Inst* inst) {
-    ExclusiveWriteMemory<16, &A32::UserCallbacks::MemoryWriteExclusive16>(ctx, inst);
+    if (conf.HasOptimization(OptimizationFlag::Unsafe_IgnoreGlobalMonitor)) {
+        ExclusiveWriteMemoryInlineUnsafe<16, &A32::UserCallbacks::MemoryWriteExclusive16>(ctx, inst);
+    } else {
+        ExclusiveWriteMemory<16, &A32::UserCallbacks::MemoryWriteExclusive16>(ctx, inst);
+    }
 }
 
 void A32EmitX64::EmitA32ExclusiveWriteMemory32(A32EmitContext& ctx, IR::Inst* inst) {
-    ExclusiveWriteMemory<32, &A32::UserCallbacks::MemoryWriteExclusive32>(ctx, inst);
+    if (conf.HasOptimization(OptimizationFlag::Unsafe_IgnoreGlobalMonitor)) {
+        ExclusiveWriteMemoryInlineUnsafe<32, &A32::UserCallbacks::MemoryWriteExclusive32>(ctx, inst);
+    } else {
+        ExclusiveWriteMemory<32, &A32::UserCallbacks::MemoryWriteExclusive32>(ctx, inst);
+    }
 }
 
 void A32EmitX64::EmitA32ExclusiveWriteMemory64(A32EmitContext& ctx, IR::Inst* inst) {
-    ExclusiveWriteMemory<64, &A32::UserCallbacks::MemoryWriteExclusive64>(ctx, inst);
+    if (conf.HasOptimization(OptimizationFlag::Unsafe_IgnoreGlobalMonitor)) {
+        ExclusiveWriteMemoryInlineUnsafe<64, &A32::UserCallbacks::MemoryWriteExclusive64>(ctx, inst);
+    } else {
+        ExclusiveWriteMemory<64, &A32::UserCallbacks::MemoryWriteExclusive64>(ctx, inst);
+    }
 }
 
 }  // namespace Dynarmic::Backend::X64
