@@ -442,8 +442,7 @@ void A32EmitX64::ExclusiveReadMemoryInlineUnsafe(A32EmitContext& ctx, IR::Inst* 
 
     const auto wrapped_fn = read_fallbacks[std::make_tuple(bitsize, vaddr.getIdx(), value.getIdx())];
 
-    Xbyak::Label abort, end;
-    bool require_abort_handling = false;
+    Xbyak::Label end;
 
     const auto src_ptr = r13 + vaddr;
 
@@ -463,14 +462,6 @@ void A32EmitX64::ExclusiveReadMemoryInlineUnsafe(A32EmitContext& ctx, IR::Inst* 
     code.mov(code.byte[r15 + offsetof(A32JitState, exclusive_state)], u8(1));
     code.mov(cmp_value_addr, Common::BitCast<u64>(GetExclusiveMonitorValuePointer(conf.global_monitor, conf.processor_id)));
     EmitWriteMemoryMov<bitsize>(code, cmp_value_addr, value);
-
-    if (require_abort_handling) {
-        code.SwitchToFarCode();
-        code.L(abort);
-        code.call(wrapped_fn);
-        code.jmp(end, code.T_NEAR);
-        code.SwitchToNearCode();
-    }
 
     ctx.reg_alloc.DefineValue(inst, value);
 }
