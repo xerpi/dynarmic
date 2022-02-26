@@ -112,6 +112,10 @@ protected:
     void EmitExclusiveReadMemory(A64EmitContext& ctx, IR::Inst* inst);
     template<std::size_t bitsize, auto callback>
     void EmitExclusiveWriteMemory(A64EmitContext& ctx, IR::Inst* inst);
+    template<std::size_t bitsize, auto callback>
+    void EmitExclusiveReadMemoryInlineUnsafe(A64EmitContext& ctx, IR::Inst* inst);
+    template<std::size_t bitsize, auto callback>
+    void EmitExclusiveWriteMemoryInlineUnsafe(A64EmitContext& ctx, IR::Inst* inst);
 
     // Terminal instruction emitters
     void EmitTerminalImpl(IR::Term::Interpret terminal, IR::LocationDescriptor initial_location, bool is_single_step) override;

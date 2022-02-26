@@ -16,6 +16,7 @@
 #include "dynarmic/backend/x64/a64_emit_x64.h"
 #include "dynarmic/backend/x64/abi.h"
 #include "dynarmic/backend/x64/devirtualize.h"
+#include "dynarmic/backend/x64/exclusive_monitor_friend.h"
 #include "dynarmic/backend/x64/perf_map.h"
 #include "dynarmic/common/x64_disassemble.h"
 #include "dynarmic/interface/exclusive_monitor.h"
@@ -645,6 +646,68 @@ void A64EmitX64::EmitExclusiveWriteMemory(A64EmitContext& ctx, IR::Inst* inst) {
         ctx.reg_alloc.ReleaseStackSpace(16 + ABI_SHADOW_SPACE);
     }
     code.L(end);
+}
+
+template<std::size_t bitsize, auto callback>
+void A64EmitX64::EmitExclusiveReadMemoryInlineUnsafe(A64EmitContext& ctx, IR::Inst* inst) {
+    ASSERT(conf.global_monitor && conf.fastmem_pointer);
+    if (!exception_handler.SupportsFastmem()) {
+        EmitExclusiveReadMemory<bitsize, callback>(ctx, inst);
+        return;
+    }
+
+    auto args = ctx.reg_alloc.GetArgumentInfo(inst);
+
+    const Xbyak::Reg64 vaddr = ctx.reg_alloc.UseGpr(args[0]);
+    const int value_idx = bitsize == 128 ? ctx.reg_alloc.ScratchXmm().getIdx() : ctx.reg_alloc.ScratchGpr().getIdx();
+    const Xbyak::Reg64 cmp_value_addr = ctx.reg_alloc.ScratchGpr();
+
+    const auto wrapped_fn = read_fallbacks[std::make_tuple(bitsize, vaddr.getIdx(), value_idx)];
+
+    Xbyak::Label abort, end;
+    bool require_abort_handling = false;
+
+    const auto src_ptr = EmitFastmemVAddr(code, ctx, abort, vaddr, require_abort_handling);
+
+    const auto location = code.getCurr();
+    EmitReadMemoryMov<bitsize>(code, value_idx, src_ptr);
+
+    fastmem_patch_info.emplace(
+        Common::BitCast<u64>(location),
+        FastmemPatchInfo{
+            Common::BitCast<u64>(code.getCurr()),
+            Common::BitCast<u64>(wrapped_fn),
+            *fastmem_marker,
+        });
+
+    code.L(end);
+
+    code.mov(code.byte[r15 + offsetof(A64JitState, exclusive_state)], u8(1));
+    code.mov(cmp_value_addr, Common::BitCast<u64>(GetExclusiveMonitorValuePointer(conf->global_monitor, conf->processor_id)));
+    EmitWriteMemoryMov<bitsize>(code, cmp_value_addr, value_idx);
+
+    if (require_abort_handling) {
+        code.SwitchToFarCode();
+        code.L(abort);
+        code.call(wrapped_fn);
+        code.jmp(end, code.T_NEAR);
+        code.SwitchToNearCode();
+    }
+
+    if constexpr (bitsize == 128) {
+        ctx.reg_alloc.DefineValue(inst, Xbyak::Xmm{value_idx});
+    } else {
+        ctx.reg_alloc.DefineValue(inst, Xbyak::Reg64{value_idx});
+    }
+}
+
+template<std::size_t bitsize, auto callback>
+void A64EmitX64::EmitExclusiveWriteMemoryInlineUnsafe(A64EmitContext& ctx, IR::Inst* inst) {
+    ASSERT(conf.global_monitor && conf.fastmem_pointer);
+    if (!exception_handler.SupportsFastmem()) {
+        EmitExclusiveReadMemory<bitsize, callback>(ctx, inst);
+        return;
+    }
 }
 
 void A64EmitX64::EmitA64ClearExclusive(A64EmitContext&, IR::Inst*) {

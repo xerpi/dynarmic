@@ -71,6 +71,8 @@ private:
     void Lock();
     void Unlock();
 
+    friend Vector* GetExclusiveMonitorValuePointer(ExclusiveMonitor*, size_t index);
+
     static constexpr VAddr RESERVATION_GRANULE_MASK = 0xFFFF'FFFF'FFFF'FFFFull;
     static constexpr VAddr INVALID_EXCLUSIVE_ADDRESS = 0xDEAD'DEAD'DEAD'DEADull;
     std::atomic_flag is_locked;
