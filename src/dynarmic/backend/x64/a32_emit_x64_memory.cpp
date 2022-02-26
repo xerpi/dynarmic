@@ -438,7 +438,7 @@ void A32EmitX64::ExclusiveReadMemoryInlineUnsafe(A32EmitContext& ctx, IR::Inst* 
 
     const Xbyak::Reg64 vaddr = ctx.reg_alloc.UseGpr(args[0]);
     const Xbyak::Reg64 value = ctx.reg_alloc.ScratchGpr();
-    const Xbyak::Reg64 cmp_value_addr = ctx.reg_alloc.ScratchGpr();
+    const Xbyak::Reg64 tmp = ctx.reg_alloc.ScratchGpr();
 
     const auto wrapped_fn = read_fallbacks[std::make_tuple(bitsize, vaddr.getIdx(), value.getIdx())];
 
@@ -460,8 +460,10 @@ void A32EmitX64::ExclusiveReadMemoryInlineUnsafe(A32EmitContext& ctx, IR::Inst* 
     code.L(end);
 
     code.mov(code.byte[r15 + offsetof(A32JitState, exclusive_state)], u8(1));
-    code.mov(cmp_value_addr, Common::BitCast<u64>(GetExclusiveMonitorValuePointer(conf.global_monitor, conf.processor_id)));
-    EmitWriteMemoryMov<bitsize>(code, cmp_value_addr, value);
+    code.mov(tmp, Common::BitCast<u64>(GetExclusiveMonitorValuePointer(conf.global_monitor, conf.processor_id)));
+    EmitWriteMemoryMov<bitsize>(code, tmp, value);
+    code.mov(tmp, Common::BitCast<u64>(GetExclusiveMonitorAddressPointer(conf.global_monitor, conf.processor_id)));
+    code.mov(qword[tmp], vaddr);
 
     ctx.reg_alloc.DefineValue(inst, value);
 }
@@ -480,7 +482,7 @@ void A32EmitX64::ExclusiveWriteMemoryInlineUnsafe(A32EmitContext& ctx, IR::Inst*
     const Xbyak::Reg64 value = ctx.reg_alloc.UseGpr(args[1]);
     const Xbyak::Reg64 vaddr = ctx.reg_alloc.UseGpr(args[0]);
     const Xbyak::Reg32 status = ctx.reg_alloc.ScratchGpr().cvt32();
-    const Xbyak::Reg64 cmp_value_addr = ctx.reg_alloc.ScratchGpr();
+    const Xbyak::Reg64 tmp = ctx.reg_alloc.ScratchGpr();
 
     const auto fallback_fn = exclusive_write_fallbacks[status.getIdx()];
 
@@ -488,13 +490,17 @@ void A32EmitX64::ExclusiveWriteMemoryInlineUnsafe(A32EmitContext& ctx, IR::Inst*
 
     const auto dest_ptr = r13 + vaddr;
 
+    code.mov(tmp, Common::BitCast<u64>(GetExclusiveMonitorAddressPointer(conf.global_monitor, conf.processor_id)));
+
     code.mov(status, u32(1));
     code.cmp(code.byte[r15 + offsetof(A32JitState, exclusive_state)], u8(0));
     code.je(end);
+    code.cmp(qword[tmp], vaddr);
+    code.jne(end);
     code.mov(code.byte[r15 + offsetof(A32JitState, exclusive_state)], u8(0));
-    code.mov(cmp_value_addr, Common::BitCast<u64>(GetExclusiveMonitorValuePointer(conf.global_monitor, conf.processor_id)));
+    code.mov(tmp, Common::BitCast<u64>(GetExclusiveMonitorValuePointer(conf.global_monitor, conf.processor_id)));
 
-    EmitReadMemoryMov<bitsize>(code, rax, cmp_value_addr);
+    EmitReadMemoryMov<bitsize>(code, rax, tmp);
 
     const auto location = code.getCurr();
 

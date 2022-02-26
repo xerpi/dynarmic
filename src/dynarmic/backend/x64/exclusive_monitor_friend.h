@@ -7,6 +7,10 @@
 
 namespace Dynarmic {
 
+inline VAddr* GetExclusiveMonitorAddressPointer(ExclusiveMonitor* monitor, size_t index) {
+    return monitor->exclusive_addresses.data() + index;
+}
+
 inline Vector* GetExclusiveMonitorValuePointer(ExclusiveMonitor* monitor, size_t index) {
     return monitor->exclusive_values.data() + index;
 }

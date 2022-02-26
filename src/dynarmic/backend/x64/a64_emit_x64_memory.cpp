@@ -670,7 +670,7 @@ void A64EmitX64::EmitExclusiveReadMemoryInlineUnsafe(A64EmitContext& ctx, IR::In
 
     const Xbyak::Reg64 vaddr = ctx.reg_alloc.UseGpr(args[0]);
     const int value_idx = bitsize == 128 ? ctx.reg_alloc.ScratchXmm().getIdx() : ctx.reg_alloc.ScratchGpr().getIdx();
-    const Xbyak::Reg64 cmp_value_addr = ctx.reg_alloc.ScratchGpr();
+    const Xbyak::Reg64 tmp = ctx.reg_alloc.ScratchGpr();
 
     const auto wrapped_fn = read_fallbacks[std::make_tuple(bitsize, vaddr.getIdx(), value_idx)];
 
@@ -693,8 +693,10 @@ void A64EmitX64::EmitExclusiveReadMemoryInlineUnsafe(A64EmitContext& ctx, IR::In
     code.L(end);
 
     code.mov(code.byte[r15 + offsetof(A64JitState, exclusive_state)], u8(1));
-    code.mov(cmp_value_addr, Common::BitCast<u64>(GetExclusiveMonitorValuePointer(conf.global_monitor, conf.processor_id)));
-    EmitWriteMemoryMov<bitsize>(code, cmp_value_addr, value_idx);
+    code.mov(tmp, Common::BitCast<u64>(GetExclusiveMonitorValuePointer(conf.global_monitor, conf.processor_id)));
+    EmitWriteMemoryMov<bitsize>(code, tmp, value_idx);
+    code.mov(tmp, Common::BitCast<u64>(GetExclusiveMonitorAddressPointer(conf.global_monitor, conf.processor_id)));
+    code.mov(qword[tmp], vaddr);
 
     if (require_abort_handling) {
         code.SwitchToFarCode();
@@ -735,7 +737,7 @@ void A64EmitX64::EmitExclusiveWriteMemoryInlineUnsafe(A64EmitContext& ctx, IR::I
     }();
     const Xbyak::Reg64 vaddr = ctx.reg_alloc.UseGpr(args[0]);
     const Xbyak::Reg32 status = ctx.reg_alloc.ScratchGpr().cvt32();
-    const Xbyak::Reg64 cmp_value_addr = ctx.reg_alloc.ScratchGpr();
+    const Xbyak::Reg64 tmp = ctx.reg_alloc.ScratchGpr();
 
     const auto fallback_fn = exclusive_write_fallbacks[status.getIdx()];
 
@@ -744,15 +746,19 @@ void A64EmitX64::EmitExclusiveWriteMemoryInlineUnsafe(A64EmitContext& ctx, IR::I
 
     const auto dest_ptr = EmitFastmemVAddr(code, ctx, abort, vaddr, require_abort_handling);
 
+    code.mov(tmp, Common::BitCast<u64>(GetExclusiveMonitorAddressPointer(conf.global_monitor, conf.processor_id)));
+
     code.mov(status, u32(1));
     code.cmp(code.byte[r15 + offsetof(A64JitState, exclusive_state)], u8(0));
     code.je(end);
+    code.cmp(qword[tmp], vaddr);
+    code.jne(end);
     code.mov(code.byte[r15 + offsetof(A64JitState, exclusive_state)], u8(0));
-    code.mov(cmp_value_addr, Common::BitCast<u64>(GetExclusiveMonitorValuePointer(conf.global_monitor, conf.processor_id)));
+    code.mov(tmp, Common::BitCast<u64>(GetExclusiveMonitorValuePointer(conf.global_monitor, conf.processor_id)));
 
     if constexpr (bitsize == 128) {
-        code.mov(rax, qword[cmp_value_addr + 0]);
-        code.mov(rdx, qword[cmp_value_addr + 8]);
+        code.mov(rax, qword[tmp + 0]);
+        code.mov(rdx, qword[tmp + 8]);
         if (code.HasHostFeature(HostFeature::SSE41)) {
             code.movq(rbx, value);
             code.pextrq(rcx, value, 1);
@@ -763,7 +769,7 @@ void A64EmitX64::EmitExclusiveWriteMemoryInlineUnsafe(A64EmitContext& ctx, IR::I
             code.movq(rcx, xmm0);
         }
     } else {
-        EmitReadMemoryMov<bitsize>(code, rax.getIdx(), cmp_value_addr);
+        EmitReadMemoryMov<bitsize>(code, rax.getIdx(), tmp);
     }
 
     const auto location = code.getCurr();

@@ -71,6 +71,7 @@ private:
     void Lock();
     void Unlock();
 
+    friend VAddr* GetExclusiveMonitorAddressPointer(ExclusiveMonitor*, size_t index);
     friend Vector* GetExclusiveMonitorValuePointer(ExclusiveMonitor*, size_t index);
 
     static constexpr VAddr RESERVATION_GRANULE_MASK = 0xFFFF'FFFF'FFFF'FFFFull;
