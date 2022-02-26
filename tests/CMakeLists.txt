@@ -47,9 +47,17 @@ add_executable(dynarmic_print_info
     print_info.cpp
 )
 
+add_executable(dynarmic_test_generator
+    fuzz_util.cpp
+    fuzz_util.h
+    rand_int.h
+    test_generator.cpp
+)
+
 include(CreateDirectoryGroups)
 create_target_directory_groups(dynarmic_tests)
 create_target_directory_groups(dynarmic_print_info)
+create_target_directory_groups(dynarmic_test_generator)
 
 target_link_libraries(dynarmic_tests PRIVATE dynarmic boost catch fmt mp xbyak)
 target_include_directories(dynarmic_tests PRIVATE . ../src)
@@ -60,5 +68,10 @@ target_link_libraries(dynarmic_print_info PRIVATE dynarmic boost catch fmt mp)
 target_include_directories(dynarmic_print_info PRIVATE . ../src)
 target_compile_options(dynarmic_print_info PRIVATE ${DYNARMIC_CXX_FLAGS})
 target_compile_definitions(dynarmic_print_info PRIVATE FMT_USE_USER_DEFINED_LITERALS=1)
+
+target_link_libraries(dynarmic_test_generator PRIVATE dynarmic boost catch fmt mp)
+target_include_directories(dynarmic_test_generator PRIVATE . ../src)
+target_compile_options(dynarmic_test_generator PRIVATE ${DYNARMIC_CXX_FLAGS})
+target_compile_definitions(dynarmic_test_generator PRIVATE FMT_USE_USER_DEFINED_LITERALS=1)
 
 add_test(dynarmic_tests dynarmic_tests --durations yes)
