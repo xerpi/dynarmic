@@ -735,6 +735,30 @@ void A64EmitX64::EmitExclusiveWriteMemory(A64EmitContext& ctx, IR::Inst* inst) {
     code.L(end);
 }
 
+void EmitExclusiveLock(BlockOfCode& code, const A64::UserConfig& conf, Xbyak::Reg64 ptr, Xbyak::Reg32 tmp) {
+    Xbyak::Label start, loop;
+
+    code.mov(ptr, Common::BitCast<u64>(GetExclusiveMonitorLockPointer(conf.global_monitor)));
+    code.jmp(start);
+    code.L(loop);
+    code.pause();
+    code.L(start);
+    code.mov(tmp, 1);
+    code.lock();
+    code.xchg(dword[ptr], tmp);
+    code.test(tmp, tmp);
+    code.jnz(loop);
+}
+
+void EmitExclusiveUnlock(BlockOfCode& code, const A64::UserConfig& conf, Xbyak::Reg64 ptr, Xbyak::Reg32 tmp) {
+    Xbyak::Label start, loop;
+
+    code.mov(ptr, Common::BitCast<u64>(GetExclusiveMonitorLockPointer(conf.global_monitor)));
+    code.xor_(tmp, tmp);
+    code.xchg(dword[ptr], tmp);
+    code.mfence();
+}
+
 template<std::size_t bitsize, auto callback>
 void A64EmitX64::EmitExclusiveReadMemoryInlineUnsafe(A64EmitContext& ctx, IR::Inst* inst) {
     ASSERT(conf.global_monitor && conf.fastmem_pointer);
@@ -748,11 +772,14 @@ void A64EmitX64::EmitExclusiveReadMemoryInlineUnsafe(A64EmitContext& ctx, IR::In
     const Xbyak::Reg64 vaddr = ctx.reg_alloc.UseGpr(args[0]);
     const int value_idx = bitsize == 128 ? ctx.reg_alloc.ScratchXmm().getIdx() : ctx.reg_alloc.ScratchGpr().getIdx();
     const Xbyak::Reg64 tmp = ctx.reg_alloc.ScratchGpr();
+    const Xbyak::Reg64 tmp2 = ctx.reg_alloc.ScratchGpr();
 
     const auto wrapped_fn = read_fallbacks[std::make_tuple(bitsize, vaddr.getIdx(), value_idx)];
 
     Xbyak::Label abort, end;
     bool require_abort_handling = false;
+
+    EmitExclusiveLock(code, conf, tmp, tmp2.cvt32());
 
     const auto src_ptr = EmitFastmemVAddr(code, ctx, abort, vaddr, require_abort_handling);
 
@@ -775,6 +802,8 @@ void A64EmitX64::EmitExclusiveReadMemoryInlineUnsafe(A64EmitContext& ctx, IR::In
 
     code.mov(tmp, Common::BitCast<u64>(GetExclusiveMonitorValuePointer(conf.global_monitor, conf.processor_id)));
     EmitWriteMemoryMov<bitsize>(code, tmp, value_idx);
+
+    EmitExclusiveUnlock(code, conf, tmp, tmp2.cvt32());
 
     if (require_abort_handling) {
         code.SwitchToFarCode();
@@ -819,18 +848,34 @@ void A64EmitX64::EmitExclusiveWriteMemoryInlineUnsafe(A64EmitContext& ctx, IR::I
 
     const auto fallback_fn = exclusive_write_fallbacks[std::make_tuple(bitsize, vaddr.getIdx(), value.getIdx())];
 
+    EmitExclusiveLock(code, conf, tmp, eax);
+
     Xbyak::Label abort, end;
     bool require_abort_handling = false;
 
     const auto dest_ptr = EmitFastmemVAddr(code, ctx, abort, vaddr, require_abort_handling);
 
     code.mov(tmp, Common::BitCast<u64>(GetExclusiveMonitorAddressPointer(conf.global_monitor, conf.processor_id)));
-
     code.mov(status, u32(1));
     code.cmp(code.byte[r15 + offsetof(A64JitState, exclusive_state)], u8(0));
     code.je(end);
     code.cmp(qword[tmp], vaddr);
     code.jne(end);
+
+    code.mov(rax, 0xDEAD'DEAD'DEAD'DEAD);
+    const size_t processor_count = GetExclusiveMonitorProcessorCount(conf.global_monitor);
+    for (size_t processsor_index = 0; processor_index < processor_count; processor_index++) {
+        if (processsor_index == conf.processor_id) {
+            continue;
+        }
+        Xbyak::Label ok;
+        code.mov(tmp, Common::BitCast<u64>(GetExclusiveMonitorAddressPointer(conf.global_monitor, processor_index)));
+        code.cmp(qword[tmp], vaddr);
+        code.jne(ok);
+        code.mov(qword[tmp], rax);
+        code.L(ok);
+    }
+
     code.mov(code.byte[r15 + offsetof(A64JitState, exclusive_state)], u8(0));
     code.mov(tmp, Common::BitCast<u64>(GetExclusiveMonitorValuePointer(conf.global_monitor, conf.processor_id)));
 
@@ -897,6 +942,8 @@ void A64EmitX64::EmitExclusiveWriteMemoryInlineUnsafe(A64EmitContext& ctx, IR::I
     code.jmp(end);
 
     code.SwitchToNearCode();
+
+    EmitExclusiveUnlock(code, conf, tmp, eax);
 
     ctx.reg_alloc.DefineValue(inst, status);
 }

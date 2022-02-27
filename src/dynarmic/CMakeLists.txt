@@ -58,6 +58,7 @@ add_library(dynarmic
     common/memory_pool.h
     common/safe_ops.h
     common/scope_exit.h
+    common/spin_lock.h
     common/string_util.h
     common/u128.cpp
     common/u128.h
