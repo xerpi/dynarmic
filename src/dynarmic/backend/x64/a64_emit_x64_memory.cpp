@@ -18,6 +18,7 @@
 #include "dynarmic/backend/x64/devirtualize.h"
 #include "dynarmic/backend/x64/exclusive_monitor_friend.h"
 #include "dynarmic/backend/x64/perf_map.h"
+#include "dynarmic/common/spin_lock_x64.h"
 #include "dynarmic/common/x64_disassemble.h"
 #include "dynarmic/interface/exclusive_monitor.h"
 
@@ -742,18 +743,8 @@ void EmitExclusiveLock(BlockOfCode& code, const A64::UserConfig& conf, Xbyak::Re
         return;
     }
 
-    Xbyak::Label start, loop;
-
     code.mov(ptr, Common::BitCast<u64>(GetExclusiveMonitorLockPointer(conf.global_monitor)));
-    code.jmp(start);
-    code.L(loop);
-    code.pause();
-    code.L(start);
-    code.mov(tmp, 1);
-    code.lock();
-    code.xchg(dword[ptr], tmp);
-    code.test(tmp, tmp);
-    code.jnz(loop);
+    EmitSpinLockLock(code, ptr, tmp);
 }
 
 void EmitExclusiveUnlock(BlockOfCode& code, const A64::UserConfig& conf, Xbyak::Reg64 ptr, Xbyak::Reg32 tmp) {
@@ -761,12 +752,8 @@ void EmitExclusiveUnlock(BlockOfCode& code, const A64::UserConfig& conf, Xbyak::
         return;
     }
 
-    Xbyak::Label start, loop;
-
     code.mov(ptr, Common::BitCast<u64>(GetExclusiveMonitorLockPointer(conf.global_monitor)));
-    code.xor_(tmp, tmp);
-    code.xchg(dword[ptr], tmp);
-    code.mfence();
+    EmitSpinLockUnlock(code, ptr, tmp);
 }
 
 void EmitExclusiveTestAndClear(BlockOfCode& code, const A64::UserConfig& conf, Xbyak::Reg64 vaddr, Xbyak::Reg64 ptr, Xbyak::Reg64 tmp) {
