@@ -99,7 +99,8 @@ protected:
     struct FastmemPatchInfo {
         u64 resume_rip;
         u64 callback;
-        std::optional<DoNotFastmemMarker> marker;
+        DoNotFastmemMarker marker;
+        bool recompile;
     };
     tsl::robin_map<u64, FastmemPatchInfo> fastmem_patch_info;
     std::set<DoNotFastmemMarker> do_not_fastmem;

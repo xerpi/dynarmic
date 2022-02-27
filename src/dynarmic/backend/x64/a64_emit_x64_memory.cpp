@@ -283,11 +283,10 @@ FakeCall A64EmitX64::FastmemCallback(u64 rip_) {
         ASSERT_FALSE("iter != fastmem_patch_info.end()");
     }
 
-    if (conf.recompile_on_fastmem_failure) {
-        if (const auto marker = iter->second.marker) {
-            do_not_fastmem.emplace(*marker);
-            InvalidateBasicBlocks({std::get<0>(*marker)});
-        }
+    if (iter->second.recompile) {
+        const auto marker = iter->second.marker;
+        do_not_fastmem.emplace(marker);
+        InvalidateBasicBlocks({std::get<0>(marker)});
     }
 
     return FakeCall{
@@ -397,24 +396,26 @@ Xbyak::RegExp EmitVAddrLookup(BlockOfCode& code, A64EmitContext& ctx, size_t bit
     return page + tmp;
 }
 
-Xbyak::RegExp EmitFastmemVAddr(BlockOfCode& code, A64EmitContext& ctx, Xbyak::Label& abort, Xbyak::Reg64 vaddr, bool& require_abort_handling) {
+Xbyak::RegExp EmitFastmemVAddr(BlockOfCode& code, A64EmitContext& ctx, Xbyak::Label& abort, Xbyak::Reg64 vaddr, bool& require_abort_handling, std::optional<Xbyak::Reg64> tmp = std::nullopt) {
     const size_t unused_top_bits = 64 - ctx.conf.fastmem_address_space_bits;
 
     if (unused_top_bits == 0) {
         return r13 + vaddr;
     } else if (ctx.conf.silently_mirror_fastmem) {
-        Xbyak::Reg64 tmp = ctx.reg_alloc.ScratchGpr();
-        if (unused_top_bits < 32) {
-            code.mov(tmp, vaddr);
-            code.shl(tmp, int(unused_top_bits));
-            code.shr(tmp, int(unused_top_bits));
-        } else if (unused_top_bits == 32) {
-            code.mov(tmp.cvt32(), vaddr.cvt32());
-        } else {
-            code.mov(tmp.cvt32(), vaddr.cvt32());
-            code.and_(tmp, u32((1 << ctx.conf.fastmem_address_space_bits) - 1));
+        if (!tmp) {
+            tmp = ctx.reg_alloc.ScratchGpr();
         }
-        return r13 + tmp;
+        if (unused_top_bits < 32) {
+            code.mov(*tmp, vaddr);
+            code.shl(*tmp, int(unused_top_bits));
+            code.shr(*tmp, int(unused_top_bits));
+        } else if (unused_top_bits == 32) {
+            code.mov(tmp->cvt32(), vaddr.cvt32());
+        } else {
+            code.mov(tmp->cvt32(), vaddr.cvt32());
+            code.and_(*tmp, u32((1 << ctx.conf.fastmem_address_space_bits) - 1));
+        }
+        return r13 + *tmp;
     } else {
         if (ctx.conf.fastmem_address_space_bits < 32) {
             code.test(vaddr, u32(-(1 << ctx.conf.fastmem_address_space_bits)));
@@ -422,9 +423,11 @@ Xbyak::RegExp EmitFastmemVAddr(BlockOfCode& code, A64EmitContext& ctx, Xbyak::La
             require_abort_handling = true;
         } else {
             // TODO: Consider having TEST as above but coalesce 64-bit constant in register allocator
-            Xbyak::Reg64 tmp = ctx.reg_alloc.ScratchGpr();
-            code.mov(tmp, vaddr);
-            code.shr(tmp, int(ctx.conf.fastmem_address_space_bits));
+            if (!tmp) {
+                tmp = ctx.reg_alloc.ScratchGpr();
+            }
+            code.mov(*tmp, vaddr);
+            code.shr(*tmp, int(ctx.conf.fastmem_address_space_bits));
             code.jnz(abort, code.T_NEAR);
             require_abort_handling = true;
         }
@@ -519,6 +522,7 @@ void A64EmitX64::EmitMemoryRead(A64EmitContext& ctx, IR::Inst* inst) {
                 Common::BitCast<u64>(code.getCurr()),
                 Common::BitCast<u64>(wrapped_fn),
                 *fastmem_marker,
+                conf.recompile_on_fastmem_failure,
             });
     } else {
         // Use page table
@@ -585,6 +589,7 @@ void A64EmitX64::EmitMemoryWrite(A64EmitContext& ctx, IR::Inst* inst) {
                 Common::BitCast<u64>(code.getCurr()),
                 Common::BitCast<u64>(wrapped_fn),
                 *fastmem_marker,
+                conf.recompile_on_fastmem_failure,
             });
     } else {
         // Use page table
@@ -795,42 +800,48 @@ void A64EmitX64::EmitExclusiveReadMemoryInline(A64EmitContext& ctx, IR::Inst* in
 
     const auto wrapped_fn = read_fallbacks[std::make_tuple(bitsize, vaddr.getIdx(), value_idx)];
 
-    Xbyak::Label abort, end;
-    bool require_abort_handling = false;
-
     EmitExclusiveLock(code, conf, tmp, tmp2.cvt32());
 
-    const auto src_ptr = EmitFastmemVAddr(code, ctx, abort, vaddr, require_abort_handling);
+    const auto fastmem_marker = ShouldFastmem(ctx, inst);
+    if (fastmem_marker) {
+        Xbyak::Label abort, end;
+        bool require_abort_handling = false;
 
-    code.mov(code.byte[r15 + offsetof(A64JitState, exclusive_state)], u8(1));
-    code.mov(tmp, Common::BitCast<u64>(GetExclusiveMonitorAddressPointer(conf.global_monitor, conf.processor_id)));
-    code.mov(qword[tmp], vaddr);
+        const auto src_ptr = EmitFastmemVAddr(code, ctx, abort, vaddr, require_abort_handling);
 
-    const auto location = code.getCurr();
-    EmitReadMemoryMov<bitsize>(code, value_idx, src_ptr);
+        code.mov(code.byte[r15 + offsetof(A64JitState, exclusive_state)], u8(1));
+        code.mov(tmp, Common::BitCast<u64>(GetExclusiveMonitorAddressPointer(conf.global_monitor, conf.processor_id)));
+        code.mov(qword[tmp], vaddr);
 
-    fastmem_patch_info.emplace(
-        Common::BitCast<u64>(location),
-        FastmemPatchInfo{
-            Common::BitCast<u64>(code.getCurr()),
-            Common::BitCast<u64>(wrapped_fn),
-            std::nullopt,
-        });
+        const auto location = code.getCurr();
+        EmitReadMemoryMov<bitsize>(code, value_idx, src_ptr);
 
-    code.L(end);
+        fastmem_patch_info.emplace(
+            Common::BitCast<u64>(location),
+            FastmemPatchInfo{
+                Common::BitCast<u64>(code.getCurr()),
+                Common::BitCast<u64>(wrapped_fn),
+                *fastmem_marker,
+                conf.recompile_on_exclusive_fastmem_failure,
+            });
+
+        code.L(end);
+
+        if (require_abort_handling) {
+            code.SwitchToFarCode();
+            code.L(abort);
+            code.call(wrapped_fn);
+            code.jmp(end, code.T_NEAR);
+            code.SwitchToNearCode();
+        }
+    } else {
+        code.call(wrapped_fn);
+    }
 
     code.mov(tmp, Common::BitCast<u64>(GetExclusiveMonitorValuePointer(conf.global_monitor, conf.processor_id)));
     EmitWriteMemoryMov<bitsize>(code, tmp, value_idx);
 
     EmitExclusiveUnlock(code, conf, tmp, tmp2.cvt32());
-
-    if (require_abort_handling) {
-        code.SwitchToFarCode();
-        code.L(abort);
-        code.call(wrapped_fn);
-        code.jmp(end, code.T_NEAR);
-        code.SwitchToNearCode();
-    }
 
     if constexpr (bitsize == 128) {
         ctx.reg_alloc.DefineValue(inst, Xbyak::Xmm{value_idx});
@@ -869,10 +880,7 @@ void A64EmitX64::EmitExclusiveWriteMemoryInline(A64EmitContext& ctx, IR::Inst* i
 
     EmitExclusiveLock(code, conf, tmp, eax);
 
-    Xbyak::Label abort, end;
-    bool require_abort_handling = false;
-
-    const auto dest_ptr = EmitFastmemVAddr(code, ctx, abort, vaddr, require_abort_handling);
+    Xbyak::Label end;
 
     code.mov(tmp, Common::BitCast<u64>(GetExclusiveMonitorAddressPointer(conf.global_monitor, conf.processor_id)));
     code.mov(status, u32(1));
@@ -902,53 +910,65 @@ void A64EmitX64::EmitExclusiveWriteMemoryInline(A64EmitContext& ctx, IR::Inst* i
         EmitReadMemoryMov<bitsize>(code, rax.getIdx(), tmp);
     }
 
-    const auto location = code.getCurr();
+    const auto fastmem_marker = ShouldFastmem(ctx, inst);
+    if (fastmem_marker) {
+        Xbyak::Label abort;
+        bool require_abort_handling = false;
 
-    if constexpr (bitsize == 128) {
-        code.lock();
-        code.cmpxchg16b(ptr[dest_ptr]);
-    } else {
-        switch (bitsize) {
-        case 8:
+        const auto dest_ptr = EmitFastmemVAddr(code, ctx, abort, vaddr, require_abort_handling, tmp);
+
+        const auto location = code.getCurr();
+
+        if constexpr (bitsize == 128) {
             code.lock();
-            code.cmpxchg(code.byte[dest_ptr], value.cvt8());
-            break;
-        case 16:
-            code.lock();
-            code.cmpxchg(word[dest_ptr], value.cvt16());
-            break;
-        case 32:
-            code.lock();
-            code.cmpxchg(dword[dest_ptr], value.cvt32());
-            break;
-        case 64:
-            code.lock();
-            code.cmpxchg(qword[dest_ptr], value.cvt64());
-            break;
-        default:
-            UNREACHABLE();
+            code.cmpxchg16b(ptr[dest_ptr]);
+        } else {
+            switch (bitsize) {
+            case 8:
+                code.lock();
+                code.cmpxchg(code.byte[dest_ptr], value.cvt8());
+                break;
+            case 16:
+                code.lock();
+                code.cmpxchg(word[dest_ptr], value.cvt16());
+                break;
+            case 32:
+                code.lock();
+                code.cmpxchg(dword[dest_ptr], value.cvt32());
+                break;
+            case 64:
+                code.lock();
+                code.cmpxchg(qword[dest_ptr], value.cvt64());
+                break;
+            default:
+                UNREACHABLE();
+            }
         }
+
+        code.setnz(status.cvt8());
+
+        code.SwitchToFarCode();
+        code.L(abort);
+        code.call(fallback_fn);
+
+        fastmem_patch_info.emplace(
+            Common::BitCast<u64>(location),
+            FastmemPatchInfo{
+                Common::BitCast<u64>(code.getCurr()),
+                Common::BitCast<u64>(fallback_fn),
+                *fastmem_marker,
+                conf.recompile_on_exclusive_fastmem_failure,
+            });
+
+        code.mov(status, rax);
+        code.jmp(end, code.T_NEAR);
+        code.SwitchToNearCode();
+    } else {
+        code.call(fallback_fn);
+        code.mov(status, rax);
     }
 
-    code.setnz(status.cvt8());
-
     code.L(end);
-    code.L(abort);
-
-    code.SwitchToFarCode();
-
-    fastmem_patch_info.emplace(
-        Common::BitCast<u64>(location),
-        FastmemPatchInfo{
-            Common::BitCast<u64>(code.getCurr()),
-            Common::BitCast<u64>(fallback_fn),
-            std::nullopt,
-        });
-
-    code.mov(status, rax);
-    code.jmp(end);
-
-    code.SwitchToNearCode();
 
     EmitExclusiveUnlock(code, conf, tmp, eax);
 
