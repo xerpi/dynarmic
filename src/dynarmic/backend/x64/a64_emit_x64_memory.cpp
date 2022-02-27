@@ -16,6 +16,7 @@
 #include "dynarmic/backend/x64/a64_emit_x64.h"
 #include "dynarmic/backend/x64/abi.h"
 #include "dynarmic/backend/x64/devirtualize.h"
+#include "dynarmic/backend/x64/emit_x64_memory.h"
 #include "dynarmic/backend/x64/exclusive_monitor_friend.h"
 #include "dynarmic/backend/x64/perf_map.h"
 #include "dynarmic/common/spin_lock_x64.h"
@@ -740,48 +741,6 @@ void A64EmitX64::EmitExclusiveWriteMemory(A64EmitContext& ctx, IR::Inst* inst) {
     }
     code.L(end);
 }
-
-namespace {
-
-void EmitExclusiveLock(BlockOfCode& code, const A64::UserConfig& conf, Xbyak::Reg64 pointer, Xbyak::Reg32 tmp) {
-    if (conf.HasOptimization(OptimizationFlag::Unsafe_IgnoreGlobalMonitor)) {
-        return;
-    }
-
-    code.mov(pointer, Common::BitCast<u64>(GetExclusiveMonitorLockPointer(conf.global_monitor)));
-    EmitSpinLockLock(code, pointer, tmp);
-}
-
-void EmitExclusiveUnlock(BlockOfCode& code, const A64::UserConfig& conf, Xbyak::Reg64 pointer, Xbyak::Reg32 tmp) {
-    if (conf.HasOptimization(OptimizationFlag::Unsafe_IgnoreGlobalMonitor)) {
-        return;
-    }
-
-    code.mov(pointer, Common::BitCast<u64>(GetExclusiveMonitorLockPointer(conf.global_monitor)));
-    EmitSpinLockUnlock(code, pointer, tmp);
-}
-
-void EmitExclusiveTestAndClear(BlockOfCode& code, const A64::UserConfig& conf, Xbyak::Reg64 vaddr, Xbyak::Reg64 pointer, Xbyak::Reg64 tmp) {
-    if (conf.HasOptimization(OptimizationFlag::Unsafe_IgnoreGlobalMonitor)) {
-        return;
-    }
-
-    code.mov(tmp, 0xDEAD'DEAD'DEAD'DEAD);
-    const size_t processor_count = GetExclusiveMonitorProcessorCount(conf.global_monitor);
-    for (size_t processor_index = 0; processor_index < processor_count; processor_index++) {
-        if (processor_index == conf.processor_id) {
-            continue;
-        }
-        Xbyak::Label ok;
-        code.mov(pointer, Common::BitCast<u64>(GetExclusiveMonitorAddressPointer(conf.global_monitor, processor_index)));
-        code.cmp(qword[pointer], vaddr);
-        code.jne(ok);
-        code.mov(qword[pointer], tmp);
-        code.L(ok);
-    }
-}
-
-}  // namespace
 
 template<std::size_t bitsize, auto callback>
 void A64EmitX64::EmitExclusiveReadMemoryInline(A64EmitContext& ctx, IR::Inst* inst) {

@@ -73,7 +73,7 @@ protected:
 
     std::map<std::tuple<size_t, int, int>, void (*)()> read_fallbacks;
     std::map<std::tuple<size_t, int, int>, void (*)()> write_fallbacks;
-    std::map<int, void (*)()> exclusive_write_fallbacks;
+    std::map<std::tuple<size_t, int, int>, void (*)()> exclusive_write_fallbacks;
     void GenFastmemFallbacks();
 
     const void* terminal_handler_pop_rsb_hint;
@@ -98,7 +98,8 @@ protected:
     struct FastmemPatchInfo {
         u64 resume_rip;
         u64 callback;
-        std::optional<DoNotFastmemMarker> marker;
+        DoNotFastmemMarker marker;
+        bool compile;
     };
     tsl::robin_map<u64, FastmemPatchInfo> fastmem_patch_info;
     std::set<DoNotFastmemMarker> do_not_fastmem;
@@ -115,9 +116,9 @@ protected:
     template<std::size_t bitsize, auto callback>
     void ExclusiveWriteMemory(A32EmitContext& ctx, IR::Inst* inst);
     template<std::size_t bitsize, auto callback>
-    void ExclusiveReadMemoryInlineUnsafe(A32EmitContext& ctx, IR::Inst* inst);
+    void ExclusiveReadMemoryInline(A32EmitContext& ctx, IR::Inst* inst);
     template<std::size_t bitsize, auto callback>
-    void ExclusiveWriteMemoryInlineUnsafe(A32EmitContext& ctx, IR::Inst* inst);
+    void ExclusiveWriteMemoryInline(A32EmitContext& ctx, IR::Inst* inst);
 
     // Terminal instruction emitters
     void EmitSetUpperLocationDescriptor(IR::LocationDescriptor new_location, IR::LocationDescriptor old_location);

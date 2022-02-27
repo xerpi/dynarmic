@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: 0BSD
  */
 
+#pragma once
+
 #include "dynarmic/interface/exclusive_monitor.h"
 
 namespace Dynarmic {
