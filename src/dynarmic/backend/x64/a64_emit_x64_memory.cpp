@@ -74,7 +74,38 @@ void A64EmitX64::GenMemory128Accessors() {
     code.add(rsp, 8);
 #endif
     code.ret();
-    PerfMapRegister(memory_read_128, code.getCurr(), "a64_memory_write_128");
+    PerfMapRegister(memory_write_128, code.getCurr(), "a64_memory_write_128");
+
+    code.align();
+    memory_exclusive_write_128 = code.getCurr<void (*)()>();
+#ifdef _WIN32
+    code.sub(rsp, 8 + 32 + ABI_SHADOW_SPACE);
+    code.lea(code.ABI_PARAM3, ptr[rsp + ABI_SHADOW_SPACE]);
+    code.lea(code.ABI_PARAM4, ptr[rsp + ABI_SHADOW_SPACE + 16]);
+    code.movaps(xword[code.ABI_PARAM3], xmm1);
+    code.movaps(xword[code.ABI_PARAM4], xmm2);
+    Devirtualize<&A64::UserCallbacks::MemoryWriteExclusive128>(conf.callbacks).EmitCall(code);
+    code.add(rsp, 8 + 16 + ABI_SHADOW_SPACE);
+#else
+    code.sub(rsp, 8);
+    if (code.HasHostFeature(HostFeature::SSE41)) {
+        code.movq(code.ABI_PARAM3, xmm1);
+        code.pextrq(code.ABI_PARAM4, xmm1, 1);
+        code.movq(code.ABI_PARAM5, xmm2);
+        code.pextrq(code.ABI_PARAM6, xmm2, 1);
+    } else {
+        code.movq(code.ABI_PARAM3, xmm1);
+        code.punpckhqdq(xmm1, xmm1);
+        code.movq(code.ABI_PARAM4, xmm1);
+        code.movq(code.ABI_PARAM5, xmm2);
+        code.punpckhqdq(xmm2, xmm2);
+        code.movq(code.ABI_PARAM6, xmm2);
+    }
+    Devirtualize<&A64::UserCallbacks::MemoryWriteExclusive128>(conf.callbacks).EmitCall(code);
+    code.add(rsp, 8);
+#endif
+    code.ret();
+    PerfMapRegister(memory_exclusive_write_128, code.getCurr(), "a64_memory_exclusive_write_128");
 }
 
 void A64EmitX64::GenFastmemFallbacks() {
@@ -90,6 +121,12 @@ void A64EmitX64::GenFastmemFallbacks() {
         {16, Devirtualize<&A64::UserCallbacks::MemoryWrite16>(conf.callbacks)},
         {32, Devirtualize<&A64::UserCallbacks::MemoryWrite32>(conf.callbacks)},
         {64, Devirtualize<&A64::UserCallbacks::MemoryWrite64>(conf.callbacks)},
+    }};
+    const std::array<std::pair<size_t, ArgCallback>, 4> exclusive_write_callbacks{{
+        {8, Devirtualize<&A64::UserCallbacks::MemoryWriteExclusive8>(conf.callbacks)},
+        {16, Devirtualize<&A64::UserCallbacks::MemoryWriteExclusive16>(conf.callbacks)},
+        {32, Devirtualize<&A64::UserCallbacks::MemoryWriteExclusive32>(conf.callbacks)},
+        {64, Devirtualize<&A64::UserCallbacks::MemoryWriteExclusive64>(conf.callbacks)},
     }};
 
     for (int vaddr_idx : idxes) {
@@ -125,6 +162,28 @@ void A64EmitX64::GenFastmemFallbacks() {
             ABI_PopCallerSaveRegistersAndAdjustStack(code);
             code.ret();
             PerfMapRegister(write_fallbacks[std::make_tuple(128, vaddr_idx, value_idx)], code.getCurr(), "a64_write_fallback_128");
+
+            code.align();
+            exclusive_write_fallbacks[std::make_tuple(128, vaddr_idx, value_idx)] = code.getCurr<void (*)()>();
+            ABI_PushCallerSaveRegistersAndAdjustStack(code);
+            if (value_idx != 1) {
+                code.movaps(xmm1, Xbyak::Xmm{value_idx});
+            }
+            if (code.HasHostFeature(HostFeature::SSE41)) {
+                code.movq(xmm2, rax);
+                code.pinsrq(xmm2, rdx, 1);
+            } else {
+                code.movq(xmm2, rax);
+                code.movq(xmm0, rdx);
+                code.punpcklqdq(xmm2, xmm0);
+            }
+            if (vaddr_idx != code.ABI_PARAM2.getIdx()) {
+                code.mov(code.ABI_PARAM2, Xbyak::Reg64{vaddr_idx});
+            }
+            code.call(memory_exclusive_write_128);
+            ABI_PopCallerSaveRegistersAndAdjustStack(code);
+            code.ret();
+            PerfMapRegister(exclusive_write_fallbacks[std::make_tuple(128, vaddr_idx, value_idx)], code.getCurr(), "a64_write_fallback_128");
 
             if (value_idx == 4 || value_idx == 15) {
                 continue;
@@ -170,15 +229,33 @@ void A64EmitX64::GenFastmemFallbacks() {
                 code.ret();
                 PerfMapRegister(write_fallbacks[std::make_tuple(bitsize, vaddr_idx, value_idx)], code.getCurr(), fmt::format("a64_write_fallback_{}", bitsize));
             }
-        }
-    }
 
-    for (int status_idx : idxes) {
-        code.align();
-        exclusive_write_fallbacks[status_idx] = code.getCurr<void (*)()>();
-        code.mov(Xbyak::Reg32{status_idx}, 1);
-        code.ret();
-        PerfMapRegister(exclusive_write_fallbacks[status_idx], code.getCurr(), fmt::format("a64_exclusive_write_fallback"));
+            for (const auto& [bitsize, callback] : exclusive_write_callbacks) {
+                code.align();
+                exclusive_write_fallbacks[std::make_tuple(bitsize, vaddr_idx, value_idx)] = code.getCurr<void (*)()>();
+                ABI_PushCallerSaveRegistersAndAdjustStack(code);
+                if (vaddr_idx == code.ABI_PARAM3.getIdx() && value_idx == code.ABI_PARAM2.getIdx()) {
+                    code.xchg(code.ABI_PARAM2, code.ABI_PARAM3);
+                } else if (vaddr_idx == code.ABI_PARAM3.getIdx()) {
+                    code.mov(code.ABI_PARAM2, Xbyak::Reg64{vaddr_idx});
+                    if (value_idx != code.ABI_PARAM3.getIdx()) {
+                        code.mov(code.ABI_PARAM3, Xbyak::Reg64{value_idx});
+                    }
+                } else {
+                    if (value_idx != code.ABI_PARAM3.getIdx()) {
+                        code.mov(code.ABI_PARAM3, Xbyak::Reg64{value_idx});
+                    }
+                    if (vaddr_idx != code.ABI_PARAM2.getIdx()) {
+                        code.mov(code.ABI_PARAM2, Xbyak::Reg64{vaddr_idx});
+                    }
+                }
+                code.mov(code.ABI_PARAM4, rax);
+                callback.EmitCall(code);
+                ABI_PopCallerSaveRegistersAndAdjustStack(code);
+                code.ret();
+                PerfMapRegister(exclusive_write_fallbacks[std::make_tuple(bitsize, vaddr_idx, value_idx)], code.getCurr(), fmt::format("a64_exclusive_write_fallback_{}", bitsize));
+            }
+        }
     }
 }
 
@@ -679,6 +756,10 @@ void A64EmitX64::EmitExclusiveReadMemoryInlineUnsafe(A64EmitContext& ctx, IR::In
 
     const auto src_ptr = EmitFastmemVAddr(code, ctx, abort, vaddr, require_abort_handling);
 
+    code.mov(code.byte[r15 + offsetof(A64JitState, exclusive_state)], u8(1));
+    code.mov(tmp, Common::BitCast<u64>(GetExclusiveMonitorAddressPointer(conf.global_monitor, conf.processor_id)));
+    code.mov(qword[tmp], vaddr);
+
     const auto location = code.getCurr();
     EmitReadMemoryMov<bitsize>(code, value_idx, src_ptr);
 
@@ -692,11 +773,8 @@ void A64EmitX64::EmitExclusiveReadMemoryInlineUnsafe(A64EmitContext& ctx, IR::In
 
     code.L(end);
 
-    code.mov(code.byte[r15 + offsetof(A64JitState, exclusive_state)], u8(1));
     code.mov(tmp, Common::BitCast<u64>(GetExclusiveMonitorValuePointer(conf.global_monitor, conf.processor_id)));
     EmitWriteMemoryMov<bitsize>(code, tmp, value_idx);
-    code.mov(tmp, Common::BitCast<u64>(GetExclusiveMonitorAddressPointer(conf.global_monitor, conf.processor_id)));
-    code.mov(qword[tmp], vaddr);
 
     if (require_abort_handling) {
         code.SwitchToFarCode();
@@ -739,7 +817,7 @@ void A64EmitX64::EmitExclusiveWriteMemoryInlineUnsafe(A64EmitContext& ctx, IR::I
     const Xbyak::Reg32 status = ctx.reg_alloc.ScratchGpr().cvt32();
     const Xbyak::Reg64 tmp = ctx.reg_alloc.ScratchGpr();
 
-    const auto fallback_fn = exclusive_write_fallbacks[status.getIdx()];
+    const auto fallback_fn = exclusive_write_fallbacks[std::make_tuple(bitsize, vaddr.getIdx(), value.getIdx())];
 
     Xbyak::Label abort, end;
     bool require_abort_handling = false;
@@ -800,6 +878,13 @@ void A64EmitX64::EmitExclusiveWriteMemoryInlineUnsafe(A64EmitContext& ctx, IR::I
         }
     }
 
+    code.setnz(status.cvt8());
+
+    code.L(end);
+    code.L(abort);
+
+    code.SwitchToFarCode();
+
     fastmem_patch_info.emplace(
         Common::BitCast<u64>(location),
         FastmemPatchInfo{
@@ -808,10 +893,10 @@ void A64EmitX64::EmitExclusiveWriteMemoryInlineUnsafe(A64EmitContext& ctx, IR::I
             std::nullopt,
         });
 
-    code.setnz(status.cvt8());
+    code.mov(status, rax);
+    code.jmp(end);
 
-    code.L(end);
-    code.L(abort);
+    code.SwitchToNearCode();
 
     ctx.reg_alloc.DefineValue(inst, status);
 }
