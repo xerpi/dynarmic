@@ -761,16 +761,16 @@ void A64EmitX64::EmitExclusiveReadMemoryInline(A64EmitContext& ctx, IR::Inst* in
 
     EmitExclusiveLock(code, conf, tmp, tmp2.cvt32());
 
+    code.mov(code.byte[r15 + offsetof(A64JitState, exclusive_state)], u8(1));
+    code.mov(tmp, Common::BitCast<u64>(GetExclusiveMonitorAddressPointer(conf.global_monitor, conf.processor_id)));
+    code.mov(qword[tmp], vaddr);
+
     const auto fastmem_marker = ShouldFastmem(ctx, inst);
     if (fastmem_marker) {
         Xbyak::Label abort, end;
         bool require_abort_handling = false;
 
         const auto src_ptr = EmitFastmemVAddr(code, ctx, abort, vaddr, require_abort_handling);
-
-        code.mov(code.byte[r15 + offsetof(A64JitState, exclusive_state)], u8(1));
-        code.mov(tmp, Common::BitCast<u64>(GetExclusiveMonitorAddressPointer(conf.global_monitor, conf.processor_id)));
-        code.mov(qword[tmp], vaddr);
 
         const auto location = code.getCurr();
         EmitReadMemoryMov<bitsize>(code, value_idx, src_ptr);
