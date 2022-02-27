@@ -735,7 +735,13 @@ void A64EmitX64::EmitExclusiveWriteMemory(A64EmitContext& ctx, IR::Inst* inst) {
     code.L(end);
 }
 
+namespace {
+
 void EmitExclusiveLock(BlockOfCode& code, const A64::UserConfig& conf, Xbyak::Reg64 ptr, Xbyak::Reg32 tmp) {
+    if (conf.HasOptimization(OptimizationFlag::Unsafe_IgnoreGlobalMonitor)) {
+        return;
+    }
+
     Xbyak::Label start, loop;
 
     code.mov(ptr, Common::BitCast<u64>(GetExclusiveMonitorLockPointer(conf.global_monitor)));
@@ -751,6 +757,10 @@ void EmitExclusiveLock(BlockOfCode& code, const A64::UserConfig& conf, Xbyak::Re
 }
 
 void EmitExclusiveUnlock(BlockOfCode& code, const A64::UserConfig& conf, Xbyak::Reg64 ptr, Xbyak::Reg32 tmp) {
+    if (conf.HasOptimization(OptimizationFlag::Unsafe_IgnoreGlobalMonitor)) {
+        return;
+    }
+
     Xbyak::Label start, loop;
 
     code.mov(ptr, Common::BitCast<u64>(GetExclusiveMonitorLockPointer(conf.global_monitor)));
@@ -759,8 +769,30 @@ void EmitExclusiveUnlock(BlockOfCode& code, const A64::UserConfig& conf, Xbyak::
     code.mfence();
 }
 
+void EmitExclusiveTestAndClear(BlockOfCode& code, const A64::UserConfig& conf, Xbyak::Reg64 vaddr, Xbyak::Reg64 ptr, Xbyak::Reg64 tmp) {
+    if (conf.HasOptimization(OptimizationFlag::Unsafe_IgnoreGlobalMonitor)) {
+        return;
+    }
+
+    code.mov(tmp, 0xDEAD'DEAD'DEAD'DEAD);
+    const size_t processor_count = GetExclusiveMonitorProcessorCount(conf.global_monitor);
+    for (size_t processor_index = 0; processor_index < processor_count; processor_index++) {
+        if (processor_index == conf.processor_id) {
+            continue;
+        }
+        Xbyak::Label ok;
+        code.mov(ptr, Common::BitCast<u64>(GetExclusiveMonitorAddressPointer(conf.global_monitor, processor_index)));
+        code.cmp(qword[ptr], vaddr);
+        code.jne(ok);
+        code.mov(qword[ptr], tmp);
+        code.L(ok);
+    }
+}
+
+}  // namespace
+
 template<std::size_t bitsize, auto callback>
-void A64EmitX64::EmitExclusiveReadMemoryInlineUnsafe(A64EmitContext& ctx, IR::Inst* inst) {
+void A64EmitX64::EmitExclusiveReadMemoryInline(A64EmitContext& ctx, IR::Inst* inst) {
     ASSERT(conf.global_monitor && conf.fastmem_pointer);
     if (!exception_handler.SupportsFastmem()) {
         EmitExclusiveReadMemory<bitsize, callback>(ctx, inst);
@@ -821,7 +853,7 @@ void A64EmitX64::EmitExclusiveReadMemoryInlineUnsafe(A64EmitContext& ctx, IR::In
 }
 
 template<std::size_t bitsize, auto callback>
-void A64EmitX64::EmitExclusiveWriteMemoryInlineUnsafe(A64EmitContext& ctx, IR::Inst* inst) {
+void A64EmitX64::EmitExclusiveWriteMemoryInline(A64EmitContext& ctx, IR::Inst* inst) {
     ASSERT(conf.global_monitor && conf.fastmem_pointer);
     if (!exception_handler.SupportsFastmem()) {
         EmitExclusiveWriteMemory<bitsize, callback>(ctx, inst);
@@ -862,19 +894,7 @@ void A64EmitX64::EmitExclusiveWriteMemoryInlineUnsafe(A64EmitContext& ctx, IR::I
     code.cmp(qword[tmp], vaddr);
     code.jne(end);
 
-    code.mov(rax, 0xDEAD'DEAD'DEAD'DEAD);
-    const size_t processor_count = GetExclusiveMonitorProcessorCount(conf.global_monitor);
-    for (size_t processsor_index = 0; processor_index < processor_count; processor_index++) {
-        if (processsor_index == conf.processor_id) {
-            continue;
-        }
-        Xbyak::Label ok;
-        code.mov(tmp, Common::BitCast<u64>(GetExclusiveMonitorAddressPointer(conf.global_monitor, processor_index)));
-        code.cmp(qword[tmp], vaddr);
-        code.jne(ok);
-        code.mov(qword[tmp], rax);
-        code.L(ok);
-    }
+    EmitExclusiveTestAndClear(code, conf, vaddr, tmp, rax);
 
     code.mov(code.byte[r15 + offsetof(A64JitState, exclusive_state)], u8(0));
     code.mov(tmp, Common::BitCast<u64>(GetExclusiveMonitorValuePointer(conf.global_monitor, conf.processor_id)));
@@ -953,80 +973,80 @@ void A64EmitX64::EmitA64ClearExclusive(A64EmitContext&, IR::Inst*) {
 }
 
 void A64EmitX64::EmitA64ExclusiveReadMemory8(A64EmitContext& ctx, IR::Inst* inst) {
-    if (conf.HasOptimization(OptimizationFlag::Unsafe_IgnoreGlobalMonitor)) {
-        EmitExclusiveReadMemoryInlineUnsafe<8, &A64::UserCallbacks::MemoryRead8>(ctx, inst);
+    if (conf.fastmem_exclusive_access) {
+        EmitExclusiveReadMemoryInline<8, &A64::UserCallbacks::MemoryRead8>(ctx, inst);
     } else {
         EmitExclusiveReadMemory<8, &A64::UserCallbacks::MemoryRead8>(ctx, inst);
     }
 }
 
 void A64EmitX64::EmitA64ExclusiveReadMemory16(A64EmitContext& ctx, IR::Inst* inst) {
-    if (conf.HasOptimization(OptimizationFlag::Unsafe_IgnoreGlobalMonitor)) {
-        EmitExclusiveReadMemoryInlineUnsafe<16, &A64::UserCallbacks::MemoryRead16>(ctx, inst);
+    if (conf.fastmem_exclusive_access) {
+        EmitExclusiveReadMemoryInline<16, &A64::UserCallbacks::MemoryRead16>(ctx, inst);
     } else {
         EmitExclusiveReadMemory<16, &A64::UserCallbacks::MemoryRead16>(ctx, inst);
     }
 }
 
 void A64EmitX64::EmitA64ExclusiveReadMemory32(A64EmitContext& ctx, IR::Inst* inst) {
-    if (conf.HasOptimization(OptimizationFlag::Unsafe_IgnoreGlobalMonitor)) {
-        EmitExclusiveReadMemoryInlineUnsafe<32, &A64::UserCallbacks::MemoryRead32>(ctx, inst);
+    if (conf.fastmem_exclusive_access) {
+        EmitExclusiveReadMemoryInline<32, &A64::UserCallbacks::MemoryRead32>(ctx, inst);
     } else {
         EmitExclusiveReadMemory<32, &A64::UserCallbacks::MemoryRead32>(ctx, inst);
     }
 }
 
 void A64EmitX64::EmitA64ExclusiveReadMemory64(A64EmitContext& ctx, IR::Inst* inst) {
-    if (conf.HasOptimization(OptimizationFlag::Unsafe_IgnoreGlobalMonitor)) {
-        EmitExclusiveReadMemoryInlineUnsafe<64, &A64::UserCallbacks::MemoryRead64>(ctx, inst);
+    if (conf.fastmem_exclusive_access) {
+        EmitExclusiveReadMemoryInline<64, &A64::UserCallbacks::MemoryRead64>(ctx, inst);
     } else {
         EmitExclusiveReadMemory<64, &A64::UserCallbacks::MemoryRead64>(ctx, inst);
     }
 }
 
 void A64EmitX64::EmitA64ExclusiveReadMemory128(A64EmitContext& ctx, IR::Inst* inst) {
-    if (conf.HasOptimization(OptimizationFlag::Unsafe_IgnoreGlobalMonitor)) {
-        EmitExclusiveReadMemoryInlineUnsafe<128, &A64::UserCallbacks::MemoryRead128>(ctx, inst);
+    if (conf.fastmem_exclusive_access) {
+        EmitExclusiveReadMemoryInline<128, &A64::UserCallbacks::MemoryRead128>(ctx, inst);
     } else {
         EmitExclusiveReadMemory<128, &A64::UserCallbacks::MemoryRead128>(ctx, inst);
     }
 }
 
 void A64EmitX64::EmitA64ExclusiveWriteMemory8(A64EmitContext& ctx, IR::Inst* inst) {
-    if (conf.HasOptimization(OptimizationFlag::Unsafe_IgnoreGlobalMonitor)) {
-        EmitExclusiveWriteMemoryInlineUnsafe<8, &A64::UserCallbacks::MemoryWriteExclusive8>(ctx, inst);
+    if (conf.fastmem_exclusive_access) {
+        EmitExclusiveWriteMemoryInline<8, &A64::UserCallbacks::MemoryWriteExclusive8>(ctx, inst);
     } else {
         EmitExclusiveWriteMemory<8, &A64::UserCallbacks::MemoryWriteExclusive8>(ctx, inst);
     }
 }
 
 void A64EmitX64::EmitA64ExclusiveWriteMemory16(A64EmitContext& ctx, IR::Inst* inst) {
-    if (conf.HasOptimization(OptimizationFlag::Unsafe_IgnoreGlobalMonitor)) {
-        EmitExclusiveWriteMemoryInlineUnsafe<16, &A64::UserCallbacks::MemoryWriteExclusive16>(ctx, inst);
+    if (conf.fastmem_exclusive_access) {
+        EmitExclusiveWriteMemoryInline<16, &A64::UserCallbacks::MemoryWriteExclusive16>(ctx, inst);
     } else {
         EmitExclusiveWriteMemory<16, &A64::UserCallbacks::MemoryWriteExclusive16>(ctx, inst);
     }
 }
 
 void A64EmitX64::EmitA64ExclusiveWriteMemory32(A64EmitContext& ctx, IR::Inst* inst) {
-    if (conf.HasOptimization(OptimizationFlag::Unsafe_IgnoreGlobalMonitor)) {
-        EmitExclusiveWriteMemoryInlineUnsafe<32, &A64::UserCallbacks::MemoryWriteExclusive32>(ctx, inst);
+    if (conf.fastmem_exclusive_access) {
+        EmitExclusiveWriteMemoryInline<32, &A64::UserCallbacks::MemoryWriteExclusive32>(ctx, inst);
     } else {
         EmitExclusiveWriteMemory<32, &A64::UserCallbacks::MemoryWriteExclusive32>(ctx, inst);
     }
 }
 
 void A64EmitX64::EmitA64ExclusiveWriteMemory64(A64EmitContext& ctx, IR::Inst* inst) {
-    if (conf.HasOptimization(OptimizationFlag::Unsafe_IgnoreGlobalMonitor)) {
-        EmitExclusiveWriteMemoryInlineUnsafe<64, &A64::UserCallbacks::MemoryWriteExclusive64>(ctx, inst);
+    if (conf.fastmem_exclusive_access) {
+        EmitExclusiveWriteMemoryInline<64, &A64::UserCallbacks::MemoryWriteExclusive64>(ctx, inst);
     } else {
         EmitExclusiveWriteMemory<64, &A64::UserCallbacks::MemoryWriteExclusive64>(ctx, inst);
     }
 }
 
 void A64EmitX64::EmitA64ExclusiveWriteMemory128(A64EmitContext& ctx, IR::Inst* inst) {
-    if (conf.HasOptimization(OptimizationFlag::Unsafe_IgnoreGlobalMonitor)) {
-        EmitExclusiveWriteMemoryInlineUnsafe<128, &A64::UserCallbacks::MemoryWriteExclusive128>(ctx, inst);
+    if (conf.fastmem_exclusive_access) {
+        EmitExclusiveWriteMemoryInline<128, &A64::UserCallbacks::MemoryWriteExclusive128>(ctx, inst);
     } else {
         EmitExclusiveWriteMemory<128, &A64::UserCallbacks::MemoryWriteExclusive128>(ctx, inst);
     }
