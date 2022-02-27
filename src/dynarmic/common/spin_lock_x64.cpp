@@ -3,11 +3,11 @@
  * SPDX-License-Identifier: 0BSD
  */
 
-#include "dynarmic/common/spin_lock.h"
+#include <xbyak/xbyak.h>
+
 #include "dynarmic/backend/x64/abi.h"
 #include "dynarmic/backend/x64/hostloc.h"
-
-#include <xbyak/xbyak.h>
+#include "dynarmic/common/spin_lock.h"
 
 namespace Dynarmic {
 
@@ -57,7 +57,7 @@ SpinLockImpl::SpinLockImpl() {
     code.ret();
 }
 
-}
+}  // namespace
 
 void SpinLock::Lock() {
     impl.lock(&storage);
