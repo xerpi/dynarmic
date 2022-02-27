@@ -93,7 +93,7 @@ void A32EmitX64::GenFastmemFallbacks() {
             for (const auto& [bitsize, callback] : exclusive_write_callbacks) {
                 code.align();
                 exclusive_write_fallbacks[std::make_tuple(bitsize, vaddr_idx, value_idx)] = code.getCurr<void (*)()>();
-                ABI_PushCallerSaveRegistersAndAdjustStack(code);
+                ABI_PushCallerSaveRegistersAndAdjustStackExcept(code, HostLoc::RAX);
                 if (vaddr_idx == code.ABI_PARAM3.getIdx() && value_idx == code.ABI_PARAM2.getIdx()) {
                     code.xchg(code.ABI_PARAM2, code.ABI_PARAM3);
                 } else if (vaddr_idx == code.ABI_PARAM3.getIdx()) {
@@ -111,7 +111,7 @@ void A32EmitX64::GenFastmemFallbacks() {
                 }
                 code.mov(code.ABI_PARAM4, rax);
                 callback.EmitCall(code);
-                ABI_PopCallerSaveRegistersAndAdjustStack(code);
+                ABI_PopCallerSaveRegistersAndAdjustStackExcept(code, HostLoc::RAX);
                 code.ret();
                 PerfMapRegister(exclusive_write_fallbacks[std::make_tuple(bitsize, vaddr_idx, value_idx)], code.getCurr(), fmt::format("a32_exclusive_write_fallback_{}", bitsize));
             }
@@ -531,9 +531,9 @@ void A32EmitX64::ExclusiveWriteMemoryInline(A32EmitContext& ctx, IR::Inst* inst)
     code.mov(tmp, Common::BitCast<u64>(GetExclusiveMonitorAddressPointer(conf.global_monitor, conf.processor_id)));
     code.mov(status, u32(1));
     code.cmp(code.byte[r15 + offsetof(A32JitState, exclusive_state)], u8(0));
-    code.je(end);
+    code.je(end, code.T_NEAR);
     code.cmp(qword[tmp], vaddr);
-    code.jne(end);
+    code.jne(end, code.T_NEAR);
 
     EmitExclusiveTestAndClear(code, conf, vaddr, tmp, rax);
 
@@ -582,12 +582,16 @@ void A32EmitX64::ExclusiveWriteMemoryInline(A32EmitContext& ctx, IR::Inst* inst)
                 conf.recompile_on_exclusive_fastmem_failure,
             });
 
-        code.mov(status, rax);
+        code.cmp(al, 0);
+        code.setz(status.cvt8());
+        code.movzx(status.cvt32(), status.cvt8());
         code.jmp(end, code.T_NEAR);
         code.SwitchToNearCode();
     } else {
         code.call(fallback_fn);
-        code.mov(status, rax);
+        code.cmp(al, 0);
+        code.setz(status.cvt8());
+        code.movzx(status.cvt32(), status.cvt8());
     }
 
     code.L(end);
