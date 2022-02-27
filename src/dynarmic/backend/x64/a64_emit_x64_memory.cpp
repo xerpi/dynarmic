@@ -743,25 +743,25 @@ void A64EmitX64::EmitExclusiveWriteMemory(A64EmitContext& ctx, IR::Inst* inst) {
 
 namespace {
 
-void EmitExclusiveLock(BlockOfCode& code, const A64::UserConfig& conf, Xbyak::Reg64 ptr, Xbyak::Reg32 tmp) {
+void EmitExclusiveLock(BlockOfCode& code, const A64::UserConfig& conf, Xbyak::Reg64 pointer, Xbyak::Reg32 tmp) {
     if (conf.HasOptimization(OptimizationFlag::Unsafe_IgnoreGlobalMonitor)) {
         return;
     }
 
-    code.mov(ptr, Common::BitCast<u64>(GetExclusiveMonitorLockPointer(conf.global_monitor)));
-    EmitSpinLockLock(code, ptr, tmp);
+    code.mov(pointer, Common::BitCast<u64>(GetExclusiveMonitorLockPointer(conf.global_monitor)));
+    EmitSpinLockLock(code, pointer, tmp);
 }
 
-void EmitExclusiveUnlock(BlockOfCode& code, const A64::UserConfig& conf, Xbyak::Reg64 ptr, Xbyak::Reg32 tmp) {
+void EmitExclusiveUnlock(BlockOfCode& code, const A64::UserConfig& conf, Xbyak::Reg64 pointer, Xbyak::Reg32 tmp) {
     if (conf.HasOptimization(OptimizationFlag::Unsafe_IgnoreGlobalMonitor)) {
         return;
     }
 
-    code.mov(ptr, Common::BitCast<u64>(GetExclusiveMonitorLockPointer(conf.global_monitor)));
-    EmitSpinLockUnlock(code, ptr, tmp);
+    code.mov(pointer, Common::BitCast<u64>(GetExclusiveMonitorLockPointer(conf.global_monitor)));
+    EmitSpinLockUnlock(code, pointer, tmp);
 }
 
-void EmitExclusiveTestAndClear(BlockOfCode& code, const A64::UserConfig& conf, Xbyak::Reg64 vaddr, Xbyak::Reg64 ptr, Xbyak::Reg64 tmp) {
+void EmitExclusiveTestAndClear(BlockOfCode& code, const A64::UserConfig& conf, Xbyak::Reg64 vaddr, Xbyak::Reg64 pointer, Xbyak::Reg64 tmp) {
     if (conf.HasOptimization(OptimizationFlag::Unsafe_IgnoreGlobalMonitor)) {
         return;
     }
@@ -773,10 +773,10 @@ void EmitExclusiveTestAndClear(BlockOfCode& code, const A64::UserConfig& conf, X
             continue;
         }
         Xbyak::Label ok;
-        code.mov(ptr, Common::BitCast<u64>(GetExclusiveMonitorAddressPointer(conf.global_monitor, processor_index)));
-        code.cmp(qword[ptr], vaddr);
+        code.mov(pointer, Common::BitCast<u64>(GetExclusiveMonitorAddressPointer(conf.global_monitor, processor_index)));
+        code.cmp(qword[pointer], vaddr);
         code.jne(ok);
-        code.mov(qword[ptr], tmp);
+        code.mov(qword[pointer], tmp);
         code.L(ok);
     }
 }
